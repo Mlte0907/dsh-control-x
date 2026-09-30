@@ -19,7 +19,14 @@ DSH（DeepSeek Harness）插件：为 Agent 提供统一的"控制面"——
 **CLI 用户（headless / tui / web profile）**：
 
 ```sh
+# ① 安装包（若提示 allowBuilds：按提示在 <profile>/pnpm-workspace.yaml 写入
+#    "allowBuilds:\n  koffi: true" 后重跑本条命令）
 dsh plugin --profile <你的profile名> add https://github.com/Mlte0907/dsh-control-x.git
+
+# ② 启动时带补丁激活（--from-default-profile 模板 profile 实测需要这一步）：
+dsh --profile <你的profile名> \
+  --patch "<DSH主目录>/profiles/<你的profile名>/node_modules/dsh-control-x/cordis.patch.yml" \
+  "你的任务"
 ```
 
 > desktop profile 被 Electron 应用独占管理，CLI 对它不生效——桌面端请走方式一。
