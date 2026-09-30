@@ -36,7 +36,8 @@
     "verify:m1": "node scripts/m1-verify.mjs",
     "verify:m2": "node scripts/m2-verify.mjs",
     "test": "node --test tests/smoke.test.mjs tests/ui.test.mjs",
-    "verify:m3": "node scripts/m3-verify.mjs"
+    "verify:m3": "node scripts/m3-verify.mjs",
+    "selfcheck": "node scripts/dsh-selfcheck.mjs"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.3",
