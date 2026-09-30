@@ -55,11 +55,16 @@ dsh --profile <你的profile名> \
 
 ## 状态
 
-**v0.1.0（2026-09-30）**：在 v0.0.1 工具面上**新增两块 UI**——
-**Settings → Built-in plugins → control-x** 设置页（无头/TTL/物理空闲/白名单，热保存到
-`~/.dsh/cache/dsh-control-x/config.json`）+ **原生右侧面板**（CDP JPEG 实时画面、
-点击/滚轮/按键直接回传到无头浏览器，不影响用户桌面，参考 `dsh-client-ui-sidebar-browser/lib/client.js:1614`
-的官方注册形状）。M0-M4 工具面不变；新增 5/5 单测全绿、m1 闭环验收通过。
+**v0.2.6（2026-09-30）**：工具面不变，本轮是性能与自检修复——
+浏览器实例空闲自动回收（`browserIdleMs`，默认 5 分钟）、面板不可见即停帧流、
+CDP 出帧节流，以及自检两处误报（Electron 多进程取错 PID、探测 profile 被插件实例持锁）修复。
+12/12 单测全绿，m1（浏览器 14 步）/ m2（桌面语义）闭环验收通过。
+
+UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 浏览器路径 / 快照 TTL /
+桌面白名单 / 物理输入空闲阈值 / 忽略证书校验 / 浏览器空闲回收 / 三个总开关，热保存到
+`~/.dsh/cache/dsh-control-x/config.json`）+ **右侧栏「X-Agent浏览器」**（CDP JPEG 实时画面、
+地址栏与前进后退刷新、外部打开、清除数据；点击/滚轮/按键回传到无头浏览器，不影响你的桌面）
++ 会话输入框的 **X-Agent** 按钮。
 
 桌面安装细节见 [docs/INSTALL-DESKTOP.md](docs/INSTALL-DESKTOP.md)；
 变更历史见 [CHANGELOG.md](CHANGELOG.md)；宿主 API 与平台事实见
@@ -87,6 +92,12 @@ npm run spike:uia      # PowerShell UIA 树探测（只读）
 
 测试 profile（cx-headless）中的插件经 pnpm 软链回本目录，改代码即时生效；用
 `dsh --profile cx-headless --patch ./cordis.patch.yml "任务"` 做无头验证。
+
+插件实例正在运行时会独占 `browser-profile` 的单例锁，验收脚本另行指定独立 profile 即可并行跑：
+
+```sh
+DHCX_BROWSER_PROFILE=$(mktemp -d) npm run verify:m1
+```
 
 ## 命名约定
 

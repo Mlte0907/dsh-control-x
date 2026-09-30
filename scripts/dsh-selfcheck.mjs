@@ -11,10 +11,10 @@
  *   3. 宿主 webServer 上的 /api/x-control/* 路由是否已注册
  *   4. 浏览器 userDataDir 与 CDP screencast 能力（面板画面的前提）
  */
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir, devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 const PROFILE = 'D:/Users/sun_w/.dsh/profiles/desktop';
 const PKG = join(PROFILE, 'node_modules/dsh-control-x/package.json');
@@ -55,41 +55,72 @@ if (existsSync(CLIENT)) {
 }
 
 console.log('=== 3. 宿主路由 /api/x-control/* ===');
-// 找 DSH 监听的端口
-let port = null;
-try {
-  const out = execSync('tasklist /FI "IMAGENAME eq DeepSeek Harness.exe" /FO CSV /NH', { encoding: 'utf8' });
-  const pid = Number((out.match(/"DeepSeek Harness\.exe","(\d+)"/) || [])[1]);
-  if (pid) {
-    const conns = execSync(
-      `powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq ${pid} } | Select-Object -First 1 -ExpandProperty LocalPort"`,
-      { encoding: 'utf8' }
-    ).trim();
-    if (conns) port = conns.split('\n')[0].trim();
+
+/** DSH 桌面版是 Electron 多进程：监听端口的进程未必是 tasklist 里的第一个同名进程，
+ *  因此必须收集全部候选 PID（Harness 主/子进程 + 可能的 node 子进程），再取并集端口。 */
+function candidatePorts() {
+  const IMAGES = ['DeepSeek Harness.exe', 'node.exe', 'dsh.exe'];
+  const pids = new Set();
+  for (const image of IMAGES) {
+    try {
+      const out = execFileSync('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' });
+      for (const m of out.matchAll(new RegExp(`"${image.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}","(\\d+)"`, 'g'))) {
+        pids.add(Number(m[1]));
+      }
+    } catch { /* 该镜像不存在则跳过 */ }
   }
-} catch { /* 忽略 */ }
+  if (pids.size === 0) return [];
+  const filter = [...pids].map((p) => `$_.OwningProcess -eq ${p}`).join(' -or ');
+  try {
+    const out = execFileSync('powershell', ['-NoProfile', '-Command',
+      `Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { ${filter} } | Select-Object -ExpandProperty LocalPort`],
+      { encoding: 'utf8' });
+    return [...new Set(out.split(/\s+/).filter(Boolean).map(Number).filter((n) => n > 0 && n < 65536))];
+  } catch { return []; }
+}
+
+/** 端口是否就是 DSH 的 web 端口：用插件路由本身判定，避免误认其它本地服务。
+ *  任何探测异常都记进 lastProbeError —— 早期版本裸 catch 吞异常，导致"curl 明明返回 200
+ *  却报未找到端口"这类静默误判。 */
+let lastProbeError = null;
+function routeStatus(port, route) {
+  try {
+    return execFileSync('curl', ['-s', '-m', '4', '-o', devNull, '-w', '%{http_code}', `http://127.0.0.1:${port}${route}`], { encoding: 'utf8' }).trim();
+  } catch (e) {
+    lastProbeError = `${port}${route}: ${String(e?.message ?? e).slice(0, 100)}`;
+    return null;
+  }
+}
+
+const ports = process.env.DSH_PORT ? [Number(process.env.DSH_PORT), ...candidatePorts()] : candidatePorts();
+let port = null;
+for (const p of ports) {
+  if (routeStatus(p, '/api/x-control/config') === '200') { port = p; break; }
+}
 
 if (!port) {
-  console.log('  – 未找到 DSH 监听端口（应用可能未运行）');
+  console.log(`  – 未找到承载插件路由的端口（已探测 ${ports.length} 个候选${ports.length ? '：' + ports.join(', ') : ''}；应用可能未运行）`);
+  if (lastProbeError) console.log('    最近一次探测错误：' + lastProbeError);
 } else {
   console.log('  端口 ' + port);
   for (const route of ['/api/x-control/config', '/api/x-control/tabs']) {
-    try {
-      const r = execSync(`curl -s -m 4 -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}${route}"`, { encoding: 'utf8' }).trim();
-      r === '200' ? ok(`${route} → 200（已注册）`) : bad(`${route} → ${r}（期望 200）`);
-    } catch (e) { bad(`${route} 请求失败`); }
+    const r = routeStatus(port, route);
+    r === '200' ? ok(`${route} → 200（已注册）`) : bad(`${route} → ${r ?? '请求失败'}（期望 200）`);
   }
 }
 
 console.log('=== 4. 浏览器与推流能力 ===');
 const dir = join(homedir(), '.dsh', 'cache', 'dsh-control-x', 'browser-profile');
 existsSync(dir) ? ok('browser-profile 存在: ' + dir) : console.log('  – browser-profile 尚未创建（首次调用 x_browser_open 时创建）');
+// 用独立临时 profile 探测：插件自己的 headless 实例若正在运行会持有 browser-profile 的单例锁，
+// 复用同一目录会以 "Target page, context or browser has been closed" 失败，从而把真实能力误判为不可用。
+const probeDir = mkdtempSync(join(tmpdir(), 'dsh-control-x-probe-'));
 try {
   const { chromium } = await import('playwright-core');
   const exe = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find((p) => existsSync(p));
   if (!exe) { bad('未找到 Chrome/Edge'); }
   else {
-    const b = await chromium.launchPersistentContext(dir, { executablePath: exe, headless: true, viewport: { width: 1280, height: 800 } });
+    const b = await chromium.launchPersistentContext(probeDir, { executablePath: exe, headless: true, viewport: { width: 1280, height: 800 } });
     const p = await b.newPage();
     await p.goto('https://example.com', { waitUntil: 'domcontentloaded', timeout: 20000 });
     const cdp = await p.context().newCDPSession(p);
@@ -102,6 +133,7 @@ try {
     await b.close();
   }
 } catch (e) { bad('浏览器探测失败: ' + String(e.message).slice(0, 80)); }
+finally { try { rmSync(probeDir, { recursive: true, force: true }); } catch { /* 临时目录残留无碍 */ } }
 
 console.log('\n' + (failures === 0 ? '自检通过。' : `自检发现 ${failures} 个问题。`));
 process.exit(failures === 0 ? 0 : 1);

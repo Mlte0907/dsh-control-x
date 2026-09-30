@@ -132,6 +132,22 @@ test('client bundle 注册三个官方原生 slot', async () => {
   delete globalThis.window;
 });
 
+test('性能契约：面板不可见即停流 + CDP 出帧节流', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  // 面板由宿主侧栏承载，不可见时组件仍挂载：不门控就会出现无人观看仍在推流的空转。
+  assert.match(src, /IntersectionObserver/, '用 IntersectionObserver 判定面板可见性');
+  assert.match(src, /ref: rootRef/, '可见性观察锚点挂在面板根节点');
+  assert.match(src, /\[selected, live\]/, '帧流订阅随可见性重建（不可见即 close）');
+  assert.match(src, /\[live\]/, '标签页轮询随可见性启停');
+
+  const { SCREENCAST_OPTIONS } = await import('../lib/browser/watch.js');
+  assert.ok(SCREENCAST_OPTIONS.everyNthFrame >= 2,
+    '服务端 120ms 才取一帧，源侧不必逐帧编码 JPEG');
+  assert.ok(SCREENCAST_OPTIONS.maxWidth <= 1280, '推流宽度受限');
+  assert.equal(SCREENCAST_OPTIONS.format, 'jpeg');
+});
+
 test('watch 路由：GET /tabs 与 GET /config', async () => {
   const { WatchServer } = await import('../lib/browser/watch.js');
   const fakeManager = {
