@@ -1,6 +1,6 @@
 {
   "name": "dsh-control-x",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "DSH 插件：为 Agent 提供浏览器（headless CDP）与本机桌面（UIA/SendInput）的统一控制面，先观察后动作、不打扰用户。",
   "type": "module",
   "main": "./lib/index.js",
@@ -16,6 +16,9 @@
     },
     "engines": {
       "dsh": ">=0.1.2-rc.1"
+    },
+    "client": {
+      "platform": "web"
     }
   },
   "scripts": {
@@ -25,7 +28,7 @@
     "spike:koffi": "node spikes/koffi-probe.mjs",
     "verify:m1": "node scripts/m1-verify.mjs",
     "verify:m2": "node scripts/m2-verify.mjs",
-    "test": "node --test tests/",
+    "test": "node --test tests/smoke.test.mjs tests/ui.test.mjs",
     "verify:m3": "node scripts/m3-verify.mjs"
   },
   "dependencies": {
@@ -36,5 +39,9 @@
   "engines": {
     "node": ">=22"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  }
 }

@@ -55,11 +55,15 @@ dsh --profile <你的profile名> \
 
 ## 状态
 
-**v0.0.1（2026-09-30）**：M0-M4 全部完成——契约锁定、浏览器控制面、桌面语义控制、
-Skill 门控 + 审批护栏 + 物理输入显式打扰路径，四项闭环验收全绿。
-路线图与设计依据见 [PROPOSAL.md](PROPOSAL.md)；宿主 API 契约与平台事实见
-[docs/DSH-SDK-CONTRACT.md](docs/DSH-SDK-CONTRACT.md)；桌面安装细节见
-[docs/INSTALL-DESKTOP.md](docs/INSTALL-DESKTOP.md)；变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+**v0.1.0（2026-09-30）**：在 v0.0.1 工具面上**新增两块 UI**——
+**Settings → Built-in plugins → control-x** 设置页（无头/TTL/物理空闲/白名单，热保存到
+`~/.dsh/cache/dsh-control-x/config.json`）+ **原生右侧面板**（CDP JPEG 实时画面、
+点击/滚轮/按键直接回传到无头浏览器，不影响用户桌面，参考 `dsh-client-ui-sidebar-browser/lib/client.js:1614`
+的官方注册形状）。M0-M4 工具面不变；新增 5/5 单测全绿、m1 闭环验收通过。
+
+桌面安装细节见 [docs/INSTALL-DESKTOP.md](docs/INSTALL-DESKTOP.md)；
+变更历史见 [CHANGELOG.md](CHANGELOG.md)；宿主 API 与平台事实见
+[docs/DSH-SDK-CONTRACT.md](docs/DSH-SDK-CONTRACT.md)。
 
 ### 工具面（激活后 19 + 门控 2）
 
