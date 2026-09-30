@@ -35,6 +35,25 @@ if (!existsSync(PKG)) {
   j.dsh?.client?.platform === 'web' ? ok('dsh.client.platform=web') : bad('dsh.client.platform 不是 web');
 }
 
+console.log('=== 1b. profile patch 重复声明检查 ===');
+// 插件在 dsh.profile.bundles 里时，宿主合成会自动应用包内 cordis.patch.yml 的 insert 声明；
+// 若用户 patch 再手写顶层 `- id: dsh-control-x` 条目，合成后同 id 两条 → 插件不挂载（2026-10-01 实测）。
+try {
+  const profileJson = JSON.parse(readFileSync(join(PROFILE, 'package.json'), 'utf8'));
+  const isBundle = ((profileJson.dsh?.profile?.bundles) ?? []).includes('dsh-control-x');
+  const patchText = readFileSync(join(PROFILE, 'cordis.patch.yml'), 'utf8');
+  const manual = /^- id: dsh-control-x$/m.test(patchText);
+  if (isBundle && manual) {
+    bad('profile cordis.patch.yml 手写了顶层 dsh-control-x 条目，而插件已是 bundle（宿主自动应用包内 patch）——同 id 双声明会让插件不挂载，请删除手写条目');
+  } else if (manual) {
+    ok('profile patch 手写条目存在（插件未列入 bundles，靠它声明）');
+  } else if (isBundle) {
+    ok('插件经 dsh.profile.bundles 自动应用包内 patch（profile 无手写条目）');
+  } else {
+    console.log('  – 插件既不在 bundles 也没有手写条目（可能未安装）');
+  }
+} catch (e) { console.log('  – 跳过（' + String(e?.message ?? e).slice(0, 60) + '）'); }
+
 console.log('=== 2. client.js inject（boot 崩溃的头号原因）===');
 const CLIENT = join(PROFILE, 'node_modules/dsh-control-x/lib/client.js');
 if (existsSync(CLIENT)) {

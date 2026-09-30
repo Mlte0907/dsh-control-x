@@ -22,6 +22,12 @@
    - `dsh.profile.bundles` 数组增加：`"dsh-control-x"`
 4. 重启桌面端。首次会话中调用 `x_activate` 激活完整工具面（加载 `control-x` skill 查看操作手册）。
 
+> **禁止手写 cordis.patch.yml 条目**：插件一旦列入 `dsh.profile.bundles`，宿主合成时会自动应用
+> 包内 `cordis.patch.yml` 的 `- insert:` 声明；用户 patch 再手写一个顶层 `- id: dsh-control-x`
+> 条目就会合成出同 id 两条 → **插件不挂载**（2026-10-01 实测）。运行期配置改走
+> 设置页「X-Agent操控」（写入 `~/.dsh/cache/dsh-control-x/config.json`），不动 patch。
+> `scripts/dsh-selfcheck.mjs` 的 1b 步会检测这种重复声明。
+
 ## 验证安装
 
 应用重启后新开会话，让 Agent 调用 `x_status`：应返回 `activated` 字段与配置摘要；
