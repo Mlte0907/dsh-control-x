@@ -77,6 +77,49 @@ test('client bundle 注册三个官方原生 slot', async () => {
   assert.equal(typeof entry.reg.Component, 'function', '侧边栏入口组件');
   const overlay = sideRegs.find((r) => r.slot === 'shell.overlay');
   assert.equal(typeof overlay.reg.Component, 'function', '面板内容组件');
+  // sidebarRightTabs 带 register → 注册右侧栏 tab（不再注册 footer/overlay）
+  const rightRegs = [];
+  const tabDefs = [];
+  await exports.apply({
+    effect: (fn) => fn(),
+    inject: (services, cb) => {
+      if (services.includes('sidebarRightTabs')) {
+        cb({
+          sidebarRightTabs: { register: (def) => { tabDefs.push(def); return () => {}; } },
+          slots: makeSlots(rightRegs),
+        });
+      }
+    },
+    slots: makeSlots([]),
+  });
+  assert.equal(tabDefs.length, 1, 'tab 类型注册一次');
+  assert.equal(tabDefs[0].id, 'dsh-control-x');
+  assert.equal(tabDefs[0].kind, 'dsh-control-x');
+  assert.equal(typeof tabDefs[0].title, 'function', 'chip 标题是取值函数');
+  assert.equal(tabDefs[0].guide.length, 1, '引导页入口一枚');
+  assert.equal(typeof tabDefs[0].guide[0].icon, 'function', '引导入口图标组件');
+  const rightSlots = rightRegs.map((r) => r.slot).sort();
+  assert.deepEqual(rightSlots, ['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title']);
+  const body = rightRegs.find((r) => r.slot === 'sidebar.right.pane.tab');
+  assert.equal(body.reg.options.key, 'dsh-control-x', '正文 seat 按 tab id keyed');
+  assert.equal(typeof body.reg.Component, 'function', 'tab 正文组件');
+  const title = rightRegs.find((r) => r.slot === 'sidebar.right.pane.tab.title');
+  assert.equal(title.reg.options.key, 'dsh-control-x');
+  // register 抛错（id 撞名）→ 退回旧路径 footer + overlay，不能带倒插件
+  const legacyRegs = [];
+  await exports.apply({
+    effect: (fn) => fn(),
+    inject: (services, cb) => {
+      if (services.includes('sidebarRightTabs')) {
+        cb({
+          sidebarRightTabs: { register: () => { throw new Error('duplicate id'); } },
+          slots: makeSlots(legacyRegs),
+        });
+      }
+    },
+    slots: makeSlots([]),
+  });
+  assert.deepEqual(legacyRegs.map((r) => r.slot).sort(), ['shell.overlay', 'sidebar.footer.action']);
   delete globalThis.window;
 });
 
