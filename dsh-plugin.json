@@ -1,0 +1,30 @@
+{
+  "$schema": "https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id": "dsh-control-x",
+  "name": "dsh-control-x",
+  "version": "0.1.1",
+  "manifestVersion": "0.15",
+  "facets": {
+    "host": {
+      "entry": "lib/index.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": []
+  },
+  "permissions": [],
+  "contributes": {
+    "commands": []
+  },
+  "subscriptions": [],
+  "license": "MIT",
+  "source": {
+    "repository": "https://github.com/Mlte0907/dsh-control-x"
+  },
+  "compat": {
+    "hosts": [
+      "dsh-web"
+    ]
+  }
+}
