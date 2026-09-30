@@ -21,28 +21,42 @@ test('client bundle 注册三个官方原生 slot', async () => {
     return {};
   });
   assert.equal(exports.name, 'dsh-control-x');
+  assert.deepEqual(exports.inject, ['slots', 'locale', 'settingsScope', 'shell']);
   const regs = [];
-  const ctx = {
+  const makeSlots = (into) => ({
+    // 宿主接受两种形状：generator function（yield register）与箭头函数（直接返回 register）
+    inject(slot, gen) {
+      const out = typeof gen === 'function' ? (gen[Symbol.iterator] ? Array.from(gen()) : [gen()]) : [gen];
+      for (const r of out) into.push({ slot, reg: r });
+    },
+    register(options, Component) { return { options, Component }; },
+  });
+  // settingsScope 分支：设置 → 插件 行内卡片
+  const settingsRegs = [];
+  await exports.apply({
     effect: (fn) => fn(),
-      slots: {
-        inject(slot, gen) {
-          const out = typeof gen === 'function' ? (gen[Symbol.iterator] ? Array.from(gen()) : [gen()]) : [gen];
-          for (const r of out) regs.push({ slot, reg: r });
-        },
-        register(options, Component) { return { options, Component }; },
-      },
-      locale: {},
-      effect: (fn) => fn(),
-    };
-  await exports.apply(ctx);
-  const names = regs.map((r) => r.slot);
-  assert.deepEqual(names.sort(), ['settings.plugins.tab', 'sidebar.right.pane.tab', 'sidebar.right.pane.tab.title']);
-  const settings = regs.find((r) => r.slot === 'settings.plugins.tab');
-  assert.equal(settings.reg.options.id, 'control-x');
-  assert.equal(typeof settings.reg.Component, 'function', '设置 tab 挂载组件');
-  const panel = regs.find((r) => r.slot === 'sidebar.right.pane.tab');
-  assert.equal(panel.reg.options.key, 'control-x');
-  assert.equal(typeof panel.reg.Component, 'function', '右侧面板组件');
+    inject: (services, cb) => { if (services.includes('settingsScope')) cb({ settingsScope: {}, slots: makeSlots(settingsRegs) }); },
+    slots: makeSlots([]),
+  });
+  assert.equal(settingsRegs.length, 1);
+  assert.equal(settingsRegs[0].slot, 'settings.plugin.item');
+  assert.equal(settingsRegs[0].reg.options.key, 'dsh-control-x');
+  assert.equal(typeof settingsRegs[0].reg.Component, 'function');
+  // 侧边栏入口 + 浮层面板
+  const shellRegs = [];
+  await exports.apply({
+    effect: (fn) => fn(),
+    inject: () => {},
+    slots: makeSlots(shellRegs),
+    shell: {},
+  });
+  const slots = shellRegs.map((r) => r.slot).sort();
+  assert.deepEqual(slots, ['shell.overlay', 'sidebar.footer.action']);
+  const entry = shellRegs.find((r) => r.slot === 'sidebar.footer.action');
+  assert.equal(entry.reg.options.id, 'control-x');
+  assert.equal(typeof entry.reg.Component, 'function', '侧边栏入口按钮');
+  const overlay = shellRegs.find((r) => r.slot === 'shell.overlay');
+  assert.equal(typeof overlay.reg.Component, 'function', '面板内容组件');
   delete globalThis.window;
 });
 
