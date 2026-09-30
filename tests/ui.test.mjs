@@ -31,21 +31,38 @@ test('client bundle 注册三个官方原生 slot', async () => {
     },
     register(options, Component) { return { options, Component }; },
   });
-  // settingsScope 缺失时必须静默跳过（不抛错），不注册任何东西
+  // configForms 缺失时必须静默跳过（不抛错），不注册任何东西
   const skipped = [];
   await exports.apply({ effect: (fn) => fn(), inject: (s, cb) => cb({}), slots: makeSlots(skipped) });
   assert.equal(skipped.length, 0, '可选服务缺失时不注册也不抛错');
-  // settingsScope 存在 → 注册设置卡片
+  // configForms 存在 → 注册插件页配置卡片（plugins.bundle.config，按包名 keyed）
   const settingsRegs = [];
+  const fakeForm = {
+    getSnapshot: () => ({ status: 'ready', writable: true, value: { headless: true, ttlMs: 30000 } }),
+    subscribe: () => () => {},
+    set: async () => {},
+  };
   await exports.apply({
     effect: (fn) => fn(),
-    inject: (services, cb) => { if (services.includes('settingsScope')) cb({ settingsScope: {}, slots: makeSlots(settingsRegs) }); },
+    inject: (services, cb) => {
+      if (services.includes('configForms')) {
+        cb({
+          configForms: { get: () => fakeForm, whileServed: (namespaces, fn) => fn() },
+          effect: (fn) => fn(),
+          slots: makeSlots(settingsRegs),
+        });
+      }
+    },
     slots: makeSlots([]),
   });
   assert.equal(settingsRegs.length, 1);
-  assert.equal(settingsRegs[0].slot, 'settings.plugin.item');
+  assert.equal(settingsRegs[0].slot, 'plugins.bundle.config');
   assert.equal(settingsRegs[0].reg.options.key, 'dsh-control-x');
+  assert.equal(typeof settingsRegs[0].reg.options.inject, 'function', 'configFace 注入（配置读写）');
   assert.equal(typeof settingsRegs[0].reg.Component, 'function');
+  const face = settingsRegs[0].reg.options.inject();
+  assert.equal(typeof face.set, 'function', 'face.set 暴露写通道');
+  assert.equal(typeof face.hooks.cxSettings.subscribe, 'function', 'face.hooks.cxSettings 是 store');
   // sidebarRightTabs 存在 → 注册侧边栏入口 + 面板
   const sideRegs = [];
   await exports.apply({
