@@ -94,3 +94,19 @@ test('总开关门控：browserEnabled/desktopEnabled 关闭后工具拒绝执�
   );
   config.desktopEnabled = true;
 });
+
+test('control-x skill 满足宿主 dsh-skill 的 validateDefinition 契约', async () => {
+  const { CONTROL_X_SKILL } = await import('../lib/skill.js');
+  // 宿主校验（dsh-skill/lib/index.js）：name 符合 kebab-case、description 非空、
+  // source/provider/content 必须是字符串；runtime provider 的 get() 原样返回注册对象，
+  // 缺 source 会在会话加载 skill 时抛 "source must be a string"，整轮运行失败。
+  assert.match(CONTROL_X_SKILL.name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+  assert.equal(typeof CONTROL_X_SKILL.description, 'string');
+  assert.ok(CONTROL_X_SKILL.description.length > 0);
+  assert.equal(typeof CONTROL_X_SKILL.source, 'string', 'source 必须是字符串（宿主加载期校验）');
+  assert.equal(typeof CONTROL_X_SKILL.content, 'string');
+  assert.ok(CONTROL_X_SKILL.content.length > 0);
+  if (CONTROL_X_SKILL.whenToUse !== undefined) {
+    assert.equal(typeof CONTROL_X_SKILL.whenToUse, 'string');
+  }
+});

@@ -1,5 +1,44 @@
 # 更新日志
 
+## 0.3.0（2026-10-01）
+
+面板对齐 ZCode（图标、交互均取自其 renderer 实现原文）+ 修复 skill 注册缺陷。
+
+### 新增
+
+- **工具栏 ZCode 化**：后退/前进/刷新换用同款 lucide 图标（chevron-left/right、refresh-cw，
+  刷新加载时旋转）；新增**自由尺寸**（monitor-smartphone）与**元素选择**（mouse-pointer-click）；
+  ⋯ 菜单（ellipsis）内含「在默认浏览器中打开」（external-link）。按钮改 ghost 图标样式。
+- **自由尺寸**：视口宽度贴合面板并随面板缩放跟随（ResizeObserver 防抖）；尺寸栏为 ZCode 同款
+  通栏贴条（全宽、居中、无边框），W×H 可精确输入，缩放 50%~200%（只改显示倍率，坐标映射不变）。
+- **元素选择（加入聊天）**：进入模式后悬停即 CDP Overlay 高亮，点击把元素定位信息
+  （标签 + CSS 选择器 + 文本）**追加进会话输入框草稿**（借 conversation.input.left 的
+  inputActions/useInput），剪贴板兜底——对齐 ZCode"选择网页元素加入聊天"。
+- **登录窗口流程**（先例 ego-browser「已登录，保存」）：面板横幅一键弹出**同一持久化 profile**
+  的有头窗口完成登录，点「已登录，保存」回无头，登录态落盘保留；用户直接关掉窗口时
+  服务端自动回无头并还原页面，横幅状态经 /tabs 的 loginActive 复位。
+- **标签页关闭**：面板标签 chip 带 ×（lucide X），`POST /close-tab` 真正关闭单个标签页。
+
+### 修复
+
+- **面板碎图**：首帧到达时 img 未挂载导致 src 丢失，静态页此后无新帧，碎图永久停留。
+  帧改存 frameRef，挂载时由 ref 回调补 src；切换标签页丢弃上一页旧画面。
+- **skill 加载崩溃**：注册对象缺 `source` 字段，会话加载 skill 时宿主
+  validateDefinition 抛 "source must be a string"，整轮运行失败。补 `source: 'runtime'`
+  并加契约测试锁定宿主校验规则。
+- **设置页开关隐形**：选中态用主题变量 `--dsw-alias-brand-primary`（本机解析为白色），
+  白轨道+白滑块不可见；品牌色全部写死 #4a7dff，滑块加投影。
+- **输入坐标换算**：原按 1280 宽写死比例，非默认视口点击偏移；改为「视口宽 ÷ 帧宽」。
+- 输入框按钮槽位从 `conversation.input.overlay`（浮层锚点，斜杠菜单专用）迁到
+  `conversation.input.left`（工具行左侧紧凑控件），不再悬在占位文字上；按钮改纯图标。
+- 移除「打开调试工具」菜单项与底部按键输入行（键盘走 Agent 的 x_browser_press），
+  提示行置顶单行省略。
+
+### 服务端路由
+
+`/viewport` `/pick` `/hover` `/pick-start` `/pick-stop` `/close-tab` `/login-window` `/login-done`；
+`/tabs` 附带 `loginActive`。单测 14/14。
+
 ## 0.2.6（2026-09-30）
 
 性能与自检修复（工具面与 UI 形状不变）：
