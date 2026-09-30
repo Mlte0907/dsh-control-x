@@ -67,3 +67,30 @@ test('execute 抛错归一为带 retry 语义的 ControlXError', async () => {
     (err) => err.code === 'ELEMENT_UNAVAILABLE' && err.retry === 'reobserve',
   );
 });
+
+test('总开关门控：browserEnabled/desktopEnabled 关闭后工具拒绝执行', async () => {
+  const { ctx, registered } = makeMockCtx();
+  const config = {
+    headless: true, ttlMs: 30000, allowedApps: [],
+    browserEnabled: true, desktopEnabled: true,
+  };
+  apply(ctx, config);
+  await registered.get('x_activate').execute({}, {});
+  assert.ok(registered.has('x_browser_open'), '激活后注册浏览器工具');
+  assert.ok(registered.has('x_desktop_apps'), '激活后注册桌面工具');
+
+  config.browserEnabled = false;
+  await assert.rejects(
+    () => registered.get('x_browser_open').execute({ url: 'https://example.com/' }, {}),
+    (err) => err.code === 'ACTION_UNAVAILABLE' && err.retry === 'never',
+    '浏览器总开关关闭后拒绝',
+  );
+  config.browserEnabled = true;
+  config.desktopEnabled = false;
+  await assert.rejects(
+    () => registered.get('x_desktop_apps').execute({}, {}),
+    (err) => err.code === 'ACTION_UNAVAILABLE',
+    '电脑控制总开关关闭后拒绝',
+  );
+  config.desktopEnabled = true;
+});

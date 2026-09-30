@@ -55,15 +55,19 @@ test('client bundle 注册三个官方原生 slot', async () => {
     },
     slots: makeSlots([]),
   });
-  assert.equal(settingsRegs.length, 1);
-  assert.equal(settingsRegs[0].slot, 'settings.section');
-  assert.equal(settingsRegs[0].reg.options.id, 'control-x');
-  assert.equal(settingsRegs[0].reg.options.label(), 'control-x', '设置导航栏标题');
-  assert.equal(typeof settingsRegs[0].reg.options.inject, 'function', 'configFace 注入（配置读写）');
-  assert.equal(typeof settingsRegs[0].reg.Component, 'function');
-  const face = settingsRegs[0].reg.options.inject();
+  assert.equal(settingsRegs.length, 2, 'settings.section + conversation.input.overlay');
+  const section = settingsRegs.find((r) => r.slot === 'settings.section');
+  assert.ok(section, '设置页 section 已注册');
+  assert.equal(section.reg.options.id, 'control-x');
+  assert.equal(section.reg.options.label(), 'X-Agent操控', '设置导航栏标题');
+  assert.equal(typeof section.reg.options.inject, 'function', 'configFace 注入（配置读写）');
+  assert.equal(typeof section.reg.Component, 'function');
+  const face = section.reg.options.inject();
   assert.equal(typeof face.set, 'function', 'face.set 暴露写通道');
   assert.equal(typeof face.hooks.cxSettings.subscribe, 'function', 'face.hooks.cxSettings 是 store');
+  const inputBtn = settingsRegs.find((r) => r.slot === 'conversation.input.overlay');
+  assert.equal(inputBtn.reg.options.id, 'control-x', '输入框按钮 seat');
+  assert.equal(typeof inputBtn.reg.Component, 'function', '输入框按钮组件');
   // sidebarRightTabs 存在 → 注册侧边栏入口 + 面板
   const sideRegs = [];
   await exports.apply({
@@ -97,13 +101,16 @@ test('client bundle 注册三个官方原生 slot', async () => {
   assert.equal(tabDefs[0].id, 'dsh-control-x');
   assert.equal(tabDefs[0].kind, 'dsh-control-x');
   assert.equal(typeof tabDefs[0].title, 'function', 'chip 标题是取值函数');
+  assert.equal(tabDefs[0].title(), 'X-Agent浏览器', '右侧栏 chip 标题');
   assert.equal(tabDefs[0].guide.length, 1, '引导页入口一枚');
+  assert.equal(tabDefs[0].guide[0].title(), 'X-Agent浏览器', '引导页入口标题');
   assert.equal(typeof tabDefs[0].guide[0].icon, 'function', '引导入口图标组件');
   const rightSlots = rightRegs.map((r) => r.slot).sort();
   assert.deepEqual(rightSlots, ['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title']);
   const body = rightRegs.find((r) => r.slot === 'sidebar.right.pane.tab');
   assert.equal(body.reg.options.key, 'dsh-control-x', '正文 seat 按 tab id keyed');
   assert.equal(typeof body.reg.Component, 'function', 'tab 正文组件');
+  assert.equal(typeof body.reg.options.inject, 'function', '正文可读设置 face（关闭横幅/按钮显隐）');
   const title = rightRegs.find((r) => r.slot === 'sidebar.right.pane.tab.title');
   assert.equal(title.reg.options.key, 'dsh-control-x');
   // register 抛错（热重放重复注册）→ 视为已就位：仍补 seat，绝不回退 footer/overlay
@@ -127,7 +134,15 @@ test('client bundle 注册三个官方原生 slot', async () => {
 
 test('watch 路由：GET /tabs 与 GET /config', async () => {
   const { WatchServer } = await import('../lib/browser/watch.js');
-  const fakeManager = { listTabs: () => [{ id: 't1', url: 'https://x/', title: 'X' }], get: () => ({}) };
+  const fakeManager = {
+    listTabs: () => [{ id: 't1', url: 'https://x/', title: 'X' }],
+    get: () => ({ url: () => 'https://x/' }),
+    requireTabId: (hint) => hint ?? 't1',
+    navigate: async (tab, url) => ({ id: tab, url, title: 'N' }),
+    open: async (url) => ({ id: 't1', url, title: 'O' }),
+    history: async (tab, action) => ({ id: tab, url: 'https://x/', title: action }),
+    clearData: async (mode) => ({ ok: true, mode, cleared: ['cache'] }),
+  };
   const ws = new WatchServer(fakeManager);
   let route = null;
   ws.attach({ register: (r) => { route = r; } });
@@ -136,10 +151,41 @@ test('watch 路由：GET /tabs 与 GET /config', async () => {
   function fakeRes() {
     return { headersSent: false, status: 0, body: '', writeHead(s) { this.status = s; }, end(b) { this.body = b; } };
   }
-  const res1 = fakeRes();
-  await route.handler({ method: 'GET', url: 'http://local/api/x-control/tabs', on() {} }, res1);
+  async function request(method, path, body) {
+    const res = fakeRes();
+    const payload = body === undefined ? '' : JSON.stringify(body);
+    const req = {
+      method,
+      url: 'http://local/api/x-control' + path,
+      on() {},
+      async *[Symbol.asyncIterator]() { if (payload) yield payload; },
+    };
+    await route.handler(req, res);
+    return res;
+  }
+  const res1 = await request('GET', '/tabs');
   assert.deepEqual(JSON.parse(res1.body), { tabs: [{ id: 't1', url: 'https://x/', title: 'X' }] });
-  const res2 = fakeRes();
-  await route.handler({ method: 'GET', url: 'http://local/api/x-control/config', on() {} }, res2);
+  const res2 = await request('GET', '/config');
   assert.equal(res2.status, 200);
+  // 地址栏导航：有 tab 原地跳，无 tab 新开
+  const nav1 = JSON.parse((await request('POST', '/navigate', { tab: 't1', url: 'https://y/' })).body);
+  assert.equal(nav1.ok, true);
+  assert.equal(nav1.tab.url, 'https://y/');
+  const nav2 = JSON.parse((await request('POST', '/navigate', { url: 'https://z/' })).body);
+  assert.equal(nav2.tab.url, 'https://z/');
+  const navBad = await request('POST', '/navigate', {});
+  assert.equal(navBad.status, 400, '缺 url 返回 400');
+  // 工具栏历史导航
+  const hist = JSON.parse((await request('POST', '/nav', { tab: 't1', action: 'back' })).body);
+  assert.equal(hist.ok, true);
+  assert.equal(hist.tab.title, 'back');
+  // 在默认浏览器打开（stub 掉真实拉起）
+  ws.spawnExternal = async (u) => u;
+  const ext = JSON.parse((await request('POST', '/open-external', { tab: 't1' })).body);
+  assert.equal(ext.ok, true);
+  assert.equal(ext.url, 'https://x/');
+  // 清除浏览器数据
+  const clear = JSON.parse((await request('POST', '/clear-data', { mode: 'all' })).body);
+  assert.equal(clear.ok, true);
+  assert.equal(clear.mode, 'all');
 });
