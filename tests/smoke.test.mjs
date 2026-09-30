@@ -4,6 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { apply, name as pluginName } from '../lib/index.js';
 import { validateAgainstSchema } from '../lib/core/tool.js';
 
@@ -31,6 +32,15 @@ test('apply 注册 x_status 且 execute 返回契约形状', async () => {
   // render 产出 content block 数组（register 契约）
   const blocks = tool.output.render({}, value);
   assert.equal(blocks[0].type, 'text');
+});
+
+test('x_status 报的版本等于 package.json 的真实版本（防再写死）', async () => {
+  const { ctx, registered } = makeMockCtx();
+  apply(ctx, { headless: true });
+  const value = await registered.get('x_status').execute({}, {});
+  const declared = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+  assert.equal(value.version, declared, `x_status 报 ${value.version}，package.json 是 ${declared}`);
+  assert.match(value.version, /^\d+\.\d+\.\d+/, '版本形如 x.y.z，不允许再出现 0.0.1 这类占位值');
 });
 
 test('参数校验：必填缺失与类型错误都能拦下', () => {

@@ -33,6 +33,10 @@ HTTP 路由与浏览器能力。**没有任何一环节跑过真宿主的注册�
 
 ### 修复
 
+- **`x_status` 谎报版本**：返回值里的 `version` 写死 `'0.0.1'`，与实际安装的包永远对不上——
+  「装的是哪版」这种第一手事实被谎报会把排障带偏（2026-10-01 真机验证时踩到）。
+  改为真读 `package.json`（`createRequire`，不依赖打包器），并加单测断言两者必须一致
+  且形如 `x.y.z`，防止再写死。
 - **新增 `lib/core/host-schema.js`**：`toHostSchema()` 在注册边界把 property-map 写法
   统一改写成 raw JSON Schema（属性上的 `required: true` → 就地提升为本级 `required` 数组）；
   `checkHostSchema()` 镜像宿主会拒绝的几种形态，供自检使用。
