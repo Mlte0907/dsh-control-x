@@ -21,8 +21,8 @@ test('client bundle 注册三个官方原生 slot', async () => {
     return {};
   });
   assert.equal(exports.name, 'dsh-control-x');
-  assert.deepEqual(exports.inject, ['slots', 'locale', 'settingsScope', 'shell']);
-  const regs = [];
+  // inject 只能声明必然存在的基础服务；可选服务走 apply 内 ctx.inject（否则 cordis 永远等待）
+  assert.deepEqual(exports.inject, ['slots', 'locale']);
   const makeSlots = (into) => ({
     // 宿主接受两种形状：generator function（yield register）与箭头函数（直接返回 register）
     inject(slot, gen) {
@@ -31,7 +31,11 @@ test('client bundle 注册三个官方原生 slot', async () => {
     },
     register(options, Component) { return { options, Component }; },
   });
-  // settingsScope 分支：设置 → 插件 行内卡片
+  // settingsScope 缺失时必须静默跳过（不抛错），不注册任何东西
+  const skipped = [];
+  await exports.apply({ effect: (fn) => fn(), inject: (s, cb) => cb({}), slots: makeSlots(skipped) });
+  assert.equal(skipped.length, 0, '可选服务缺失时不注册也不抛错');
+  // settingsScope 存在 → 注册设置卡片
   const settingsRegs = [];
   await exports.apply({
     effect: (fn) => fn(),
@@ -42,20 +46,19 @@ test('client bundle 注册三个官方原生 slot', async () => {
   assert.equal(settingsRegs[0].slot, 'settings.plugin.item');
   assert.equal(settingsRegs[0].reg.options.key, 'dsh-control-x');
   assert.equal(typeof settingsRegs[0].reg.Component, 'function');
-  // 侧边栏入口 + 浮层面板
-  const shellRegs = [];
+  // sidebarRightTabs 存在 → 注册侧边栏入口 + 面板
+  const sideRegs = [];
   await exports.apply({
     effect: (fn) => fn(),
-    inject: () => {},
-    slots: makeSlots(shellRegs),
-    shell: {},
+    inject: (services, cb) => { if (services.includes('sidebarRightTabs')) cb({ sidebarRightTabs: {}, slots: makeSlots(sideRegs) }); },
+    slots: makeSlots([]),
   });
-  const slots = shellRegs.map((r) => r.slot).sort();
+  const slots = sideRegs.map((r) => r.slot).sort();
   assert.deepEqual(slots, ['shell.overlay', 'sidebar.footer.action']);
-  const entry = shellRegs.find((r) => r.slot === 'sidebar.footer.action');
+  const entry = sideRegs.find((r) => r.slot === 'sidebar.footer.action');
   assert.equal(entry.reg.options.id, 'control-x');
-  assert.equal(typeof entry.reg.Component, 'function', '侧边栏入口按钮');
-  const overlay = shellRegs.find((r) => r.slot === 'shell.overlay');
+  assert.equal(typeof entry.reg.Component, 'function', '侧边栏入口组件');
+  const overlay = sideRegs.find((r) => r.slot === 'shell.overlay');
   assert.equal(typeof overlay.reg.Component, 'function', '面板内容组件');
   delete globalThis.window;
 });
