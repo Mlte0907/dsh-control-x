@@ -1,5 +1,22 @@
 # 更新日志
 
+## 0.1.0（2026-09-30）
+
+新增两块 UI（v0.0.1 工具面不变）：
+
+- **设置页**：注册 `settings.plugins.tab` slot（id=`control-x`，与官方 `dsh-client-ui-plugin-inventory` 同形状），
+  暴露 headless / ttlMs / allowedApps / physicalIdleMs 四项，热保存到 `~/.dsh/cache/dsh-control-x/config.json`。
+- **原生右侧面板**：注册 `sidebar.right.pane.tab` + `.title` slot（与官方 `dsh-client-ui-sidebar-browser/lib/client.js:1614` 同形状），
+  实时显示无头浏览器 CDP JPEG 帧、点击/滚轮/按键直接回传到该浏览器（不影响用户桌面），
+  顶部标签条对应 `x_browser_tabs` 列表。
+
+实现细节见 `lib/browser/watch.js`（webServer SSE/输入路由）、`lib/client.js`（客户端 bundle）、
+`lib/index.js`（`webServer` 机会性注册）。
+
+### 新增
+
+- 单测 `tests/ui.test.mjs`：客户端 bundle 三个官方 slot 注册 + watch 路由行为。
+
 ## 0.0.1（2026-09-30）
 
 首个里程碑版本：M0-M3 全部闭环验收通过。
