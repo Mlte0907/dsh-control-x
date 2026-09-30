@@ -117,3 +117,13 @@ desktop 应用自带凭据，M1 在其中做首次真实调用验证。
 | 观察树有 maxElements 上限（默认 200，可调 500）——元素计数类断言会被 cap 掩盖 | 效果验证应使用**状态字段**（value/toggleState）而非元素计数 |
 | 观察性能：499 元素全量 ~850ms（含 PowerShell 进程启动 ~1s 另计） | 每工具调用 spawn 一次 helper 可接受；常驻 helper 为后续优化项 |
 | x_desktop_value 写入"复制字符"Edit、Toggle 高级查看，全程未抢焦点（charmap 窗口 focused=false） | §6.7-3 在 Windows 上成立的直接证据 |
+
+## 12. 双 home 陷阱（M5 实测，2026-09-30）
+
+- 桌面应用的 home 是 **`D:\Users\sun_w\.dsh`**（应用自行配置）；终端里直接跑 `dsh` CLI 时若未设
+  `DSH_HOME`，会落到 **`C:\Users\sun_w\.dsh`**（`~` 默认值）并新建一个平行 home——
+  实测同一台机器出现两个 `.dsh`，测试 profile 建到了 C 盘，排查时误判"desktop profile 消失"。
+- **教训**：凡涉及 profile 的 CLI 操作，先确认 `DSH_HOME`/目标路径；文件系统检查用
+  `node fs`/`cmd dir`，Git Bash 的 `ls` 在本机对新建目录的枚举偶发不可见（另见 §11 编码坑）。
+- 插件的浏览器 profile 目录用 `os.homedir()`（= C 盘用户目录），与 DSH home（D 盘）不在同一卷：
+  功能无影响，注意备份/迁移时两处都要看。
