@@ -1,5 +1,74 @@
 # 更新日志
 
+## 0.3.1（2026-10-01）
+
+**致命修复：21 个工具全部注册失败，用户侧零感知。** 插件照常挂载、面板照常打开、
+`control-x` skill 照常出现在技能目录，但 `x_status` / `x_activate` / `x_browser_*` /
+`x_desktop_*` 一个都没进 Agent 的工具表——插件装好了，却一个动作也发不出去。
+
+### 根因
+
+`ctx.tools.register()`（宿主 `@deepseek-ai/dsh-tools` 0.2.0-rc.2，
+`lib/index.js:2878-2890`）第一件事就是 `assertSupportedJsonSchema(output.schema)`，
+不合 raw JSON Schema 子集**直接抛错**。
+
+本插件的 `parameters` 用的是宿主 `defineTool` 的 **property-map DSL**（property 上写
+`required: true`），这个写法被顺手照搬进了 `output.schema`——后者是 **raw JSON Schema**，
+`required` 必须是字符串数组、且不能挂在标量/数组节点上。于是 21 个工具 100% 被注册门拒收：
+
+```
+✘ x_status: schema.properties.config.required must be an array of strings;
+             schema.required must be an array of strings
+✘ x_browser_tabs: schema.properties.ok.required is not supported on type "boolean";
+```
+
+`lib/index.js` 的 `safeRegister` 用 try/catch 吞掉异常、只写一条 `logger.warn`，
+桌面上没有任何提示——这就是它能长期"全绿"的原因。
+
+### 为什么之前没发现
+
+`verify:m1/m2/m3` 全部用 mock `ctx.tools.register`（来者不拒），`selfcheck` 只查安装面、
+HTTP 路由与浏览器能力。**没有任何一环节跑过真宿主的注册门**，于是 5/5 全绿而链路是断的
+（与 pangu「中间件只认 X-API-Key」同族：单元绿、集成绿、装配不通）。
+
+### 修复
+
+- **新增 `lib/core/host-schema.js`**：`toHostSchema()` 在注册边界把 property-map 写法
+  统一改写成 raw JSON Schema（属性上的 `required: true` → 就地提升为本级 `required` 数组）；
+  `checkHostSchema()` 镜像宿主会拒绝的几种形态，供自检使用。
+- **新增 `tests/host-contract.test.mjs`（4 项）**：21 个工具的 `parameters` 与
+  `output.schema` 全部过子集检查 + **反向对照**（旧写法必须被判红，否则绿是假绿）+
+  **反向保证**（`x_browser_open` 的 `ok`/`tab` 必须真的进了根级 `required`，防规范化空转）。
+- **新增 `scripts/host-contract-verify.mjs`（`npm run verify:contract`）**：从**运行中**
+  `app.asar` 里递归抽出 `@deepseek-ai/dsh-tools` 包闭包，直接 `import` 宿主的
+  `assertSupportedJsonSchema` 原件（未改写一行）逐个判 21 个工具；找不到 app.asar 时
+  退回仓库内镜像规则并在输出里注明。这才是能抓住本次缺陷的那道门。
+- **`lib/core/tool.js`**：契约注释订正——`parameters` 与 `output.schema` 是两套方言，
+  混用会被宿主拒收。
+- **`docs/DSH-SDK-CONTRACT.md` 新增 §1b**：三种方言的对照表与 raw 子集硬规则，
+  并注明 `parameters` 宿主**不校验**（原样投影给模型）、`output.schema` 强制校验。
+- `package.json`：`test` 纳入新测试文件，新增 `verify:contract`。
+
+### 验证（修复后实测）
+
+| 项 | 结果 |
+|---|---|
+| `npm test` | **18/18**（原 14 + 新增 4） |
+| `npm run verify:contract`（宿主**真校验器**） | **21/21 通过**，0 拒绝 |
+| `verify:m1` 浏览器面 | 14 步全绿（真无头 Chrome + cn.bing.com 搜索 + 68KB 截图落盘） |
+| `verify:m2` 桌面语义面 | 全绿（charmap UIA 树 499 元素、ValuePattern 写入 `"X"` 复核、Toggle Off→On） |
+| `verify:m3` 门控 + 物理面 | 全绿（物理点击 ToggleState Off→On，审批/危险词护栏全对） |
+| `selfcheck` | 全绿（`/api/x-control/config` 与 `/tabs` 均 200） |
+
+修复前同一套真宿主校验的读数是「通过 0 / 拒绝 21」，作为前后对照。
+
+### 尚未验证（需要重启宿主）
+
+本仓库的改动**不会**自动进入正在运行的 DSH：desktop profile 的插件是从
+`github:Mlte0907/dsh-control-x#b0d5ceb` 安装的独立副本（不是软链回本目录，
+只有 `cx-headless` 测试 profile 是软链）。提交并重新安装（或改用软链）后重启宿主、
+新开会话，`x_status` 才会出现在工具表里。**在此之前请以 `npm run verify:contract` 的读数为准。**
+
 ## 0.3.0（2026-10-01）
 
 面板对齐 ZCode（图标、交互均取自其 renderer 实现原文）+ 修复 skill 注册缺陷。

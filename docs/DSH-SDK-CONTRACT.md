@@ -11,7 +11,7 @@ defineTool({
   name, description,
   parameters,            // schema DSL；property 支持 required:true + description/title/default/examples
   output: {
-    schema,              // schema DSL（canonical output declaration）
+    schema,              // value schema spec（由 defineTool 编译成 raw JSON Schema 后再校验）
     render(args, value), // 返回 content block 数组
     presentationMeta?,   // 可选
   },
@@ -25,6 +25,42 @@ defineTool({
 
 - 参数校验在 execute 前自动进行，违规抛 `ToolArgsError`（index.js:863-865）。
 - schema DSL 支持 `string/number/integer/boolean/null/array/object/json/oneOf`（README:60）。
+
+### 1b. 自研插件注册：**output.schema 必须是 raw JSON Schema，不是 DSL**（2026-10-01 实测踩坑）
+
+上面那段 DSL 记法只适用于**调用宿主 `defineTool`**——它内部会把两处都编译：
+
+```js
+const parameters   = parameterSchemaSpecToJsonSchema(options.parameters);   // index.js:842 附近
+const outputSchema = valueSchemaSpecToJsonSchema(options.output.schema);
+```
+
+本插件刻意不 import 宿主包（§9），注册的是**裸 definition 对象**，走的是另一条路：
+
+```js
+register(definition) {                       // dsh-tools/lib/index.js:2878
+  assertSupportedJsonSchema(output.schema);  // ← 直接拿 raw JSON Schema 校验，不通过就抛
+  ...
+  return this.layers.effect(this.ctx, (layer) => layer.tools.insert(name, definition));
+}
+```
+
+于是三种方言并存，**混用即静默失败**：
+
+| 位置 | 宿主是否校验 | 合法写法 | 写错的后果 |
+|---|---|---|---|
+| `parameters` | **不校验**，`schemaOf()` 原样投影给模型（index.js:3028-3035） | 两边都能过；建议写标准 raw JSON Schema | 模型侧看到非标准关键字 |
+| `output.schema`（自研 definition） | **强制校验**，抛 `JsonSchemaError` | 必须是标准 raw JSON Schema | 工具**注册失败** |
+| `output.schema`（经 defineTool） | defineTool 先编译再校验 | DSL 或 raw 都行 | — |
+
+raw 子集的硬规则（`lib/types/json-schema.js` 的 `checkSchemaNode` / `checkObjectSchemaTail`）：
+
+- `required` **必须是字符串数组**（`schema.required must be an array of strings`）；
+- `required` **不能挂在标量/数组节点上**（`required is not supported on type "boolean"`）；
+- `required` 里的名字必须在 `properties` 里声明过；
+- `type` 与 `oneOf` 不能同时声明；关键词限 `type/oneOf/properties/required/additionalProperties/items/enum/const` + 注解。
+
+> **本项目为什么没踩第二次**：`defineXTool` 在注册边界统一调 `toHostSchema()`（`lib/core/host-schema.js`）把 property-map 的 `required: true` 提升成根级字符串数组；`tests/host-contract.test.mjs` 钉死全部 21 个工具，`npm run verify:contract` 直接抽宿主真校验器来判。
 
 ## 2. exec 表面（grep lib/index.js 实测）
 

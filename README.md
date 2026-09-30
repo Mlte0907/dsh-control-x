@@ -55,6 +55,12 @@ dsh --profile <你的profile名> \
 
 ## 状态
 
+**v0.3.1（2026-10-01）**：**修复 21 个工具全部注册失败且用户侧无感知的致命缺陷**
+（`output.schema` 误用 property-map 方言，被宿主 `assertSupportedJsonSchema` 全数拒收，
+而 `safeRegister` 吞异常只写日志）。修复走注册边界统一规范化 + 新增宿主契约测试与
+`npm run verify:contract`（直接抽宿主真校验器判 21 个工具）。18/18 单测、
+21/21 真宿主契约、m1/m2/m3 与 selfcheck 全绿。详见 [CHANGELOG.md](CHANGELOG.md)。
+
 **v0.3.0（2026-10-01）**：面板全面对齐 ZCode——同款 lucide 图标工具栏（后退/前进/刷新/
 **自由尺寸**/**元素选择**/⋯菜单）、尺寸栏（W×H + 50%~200% 缩放）、标签 chip 关闭、
 **登录窗口流程**（同 profile 临时有头登录，登录态落盘）、选元结果**加入会话输入框草稿**；
@@ -83,6 +89,7 @@ UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 
 ```sh
 npm install            # 依赖（schemastery / playwright-core / koffi）
 npm test               # 宿主外冒烟测试（node --test）
+npm run verify:contract # 宿主契约验收（抽 app.asar 内真校验器判 21 个工具）
 npm run verify:m1      # 浏览器控制面闭环验收（真实联网）
 npm run verify:m2      # 桌面语义控制闭环验收（启动 charmap 并清理）
 npm run verify:m3      # 门控 + skill + 物理输入闭环验收
