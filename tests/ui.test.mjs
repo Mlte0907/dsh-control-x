@@ -35,7 +35,7 @@ test('client bundle 注册三个官方原生 slot', async () => {
   const skipped = [];
   await exports.apply({ effect: (fn) => fn(), inject: (s, cb) => cb({}), slots: makeSlots(skipped) });
   assert.equal(skipped.length, 0, '可选服务缺失时不注册也不抛错');
-  // configForms 存在 → 注册插件页配置卡片（plugins.bundle.config，按包名 keyed）
+  // configForms 存在 → 注册设置页配置区（settings.section，先例 dsh-pangu/agent-presets）
   const settingsRegs = [];
   const fakeForm = {
     getSnapshot: () => ({ status: 'ready', writable: true, value: { headless: true, ttlMs: 30000 } }),
@@ -56,8 +56,9 @@ test('client bundle 注册三个官方原生 slot', async () => {
     slots: makeSlots([]),
   });
   assert.equal(settingsRegs.length, 1);
-  assert.equal(settingsRegs[0].slot, 'plugins.bundle.config');
-  assert.equal(settingsRegs[0].reg.options.key, 'dsh-control-x');
+  assert.equal(settingsRegs[0].slot, 'settings.section');
+  assert.equal(settingsRegs[0].reg.options.id, 'control-x');
+  assert.equal(settingsRegs[0].reg.options.label(), 'control-x', '设置导航栏标题');
   assert.equal(typeof settingsRegs[0].reg.options.inject, 'function', 'configFace 注入（配置读写）');
   assert.equal(typeof settingsRegs[0].reg.Component, 'function');
   const face = settingsRegs[0].reg.options.inject();
@@ -105,21 +106,22 @@ test('client bundle 注册三个官方原生 slot', async () => {
   assert.equal(typeof body.reg.Component, 'function', 'tab 正文组件');
   const title = rightRegs.find((r) => r.slot === 'sidebar.right.pane.tab.title');
   assert.equal(title.reg.options.key, 'dsh-control-x');
-  // register 抛错（id 撞名）→ 退回旧路径 footer + overlay，不能带倒插件
-  const legacyRegs = [];
+  // register 抛错（热重放重复注册）→ 视为已就位：仍补 seat，绝不回退 footer/overlay
+  const replayRegs = [];
   await exports.apply({
     effect: (fn) => fn(),
     inject: (services, cb) => {
       if (services.includes('sidebarRightTabs')) {
         cb({
           sidebarRightTabs: { register: () => { throw new Error('duplicate id'); } },
-          slots: makeSlots(legacyRegs),
+          slots: makeSlots(replayRegs),
         });
       }
     },
     slots: makeSlots([]),
   });
-  assert.deepEqual(legacyRegs.map((r) => r.slot).sort(), ['shell.overlay', 'sidebar.footer.action']);
+  assert.deepEqual(replayRegs.map((r) => r.slot).sort(), ['sidebar.right.pane.tab', 'sidebar.right.pane.tab.title'],
+    '重复注册时仍补 seat，不产生 footer/overlay 双入口');
   delete globalThis.window;
 });
 
