@@ -19,6 +19,17 @@ function assert(cond, message) {
   console.log(`  ✔ ${message}`);
 }
 
+/** 宿主会用 output.schema 校验工具返回值——返回缺 schema 要求的键 = 这次调用被判失败。
+ *  2026-10-01 真机 E2E 实测踩到过：x_desktop_launch / x_desktop_mouse_click / x_desktop_type /
+ *  x_desktop_key 全都漏了 ok:true，而 schema 把 ok 列为必填。 */
+function assertReturnShape(tool, value, label) {
+  const need = tool.output?.schema?.required ?? [];
+  const have = value !== null && typeof value === 'object' ? Object.keys(value) : [];
+  const missing = need.filter((key) => !have.includes(key));
+  assert(missing.length === 0, `${label} 返回值满足自身契约（实际键：${have.join(',')}）`);
+  return value;
+}
+
 // ── 1. 门控 ──
 let skillRegistered = null;
 const registered = new Map();
@@ -57,6 +68,7 @@ const call = async (name, args) => {
 };
 
 const launched = await call('x_desktop_launch', { target: 'charmap.exe' });
+assertReturnShape(registered.get('x_desktop_launch'), launched, 'x_desktop_launch');
 // 失败也必须清理：绝不留下僵尸窗口叠在用户桌面上（M4 教训：僵尸窗口曾污染验收）。
 let cleanupDone = false;
 const cleanup = async () => {
@@ -83,6 +95,7 @@ try {
   const clicked = await call('x_desktop_mouse_click', {
     observation: obs.observation, element: advanced.index, confirm_disturbance: true,
   });
+  assertReturnShape(registered.get('x_desktop_mouse_click'), clicked, 'x_desktop_mouse_click');
   assert(/已前置窗口/.test(clicked.disturbance) && /真实光标/.test(clicked.disturbance),
     `结果明示打扰：${clicked.disturbance.slice(0, 50)}…`);
 

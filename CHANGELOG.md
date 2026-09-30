@@ -33,6 +33,15 @@ HTTP 路由与浏览器能力。**没有任何一环节跑过真宿主的注册�
 
 ### 修复
 
+- **5 个工具的返回值不满足自己的 output.schema**（注册修好后立刻暴露的第二层缺陷）：
+  `x_browser_tabs`、`x_desktop_launch`、`x_desktop_mouse_click`、`x_desktop_type`、
+  `x_desktop_key` 都直接 `return { … }` 而**漏掉 `ok: true`**，但它们的 schema 把 `ok`
+  列为必填。宿主会用 `output.schema` 校验工具返回值，缺一个键整个调用就被判失败
+  （`missing required property "value.ok"`）——真机 E2E 第一次调 `x_browser_tabs` 就撞上。
+  **这五个 bug 此前被"注册失败"整体遮住了**：工具压根注册不上，返回值从没被校验过。
+  三道防线：①五处补 `ok: true`；②`defineXTool` 统一自检返回值是否满足自身 schema 的
+  必填键，缺则抛点名道姓的 ControlXError（不再让宿主抛含糊错误）；③m2/m3 验收脚本对
+  每个用到的工具做返回值形状对账 + 单测覆盖无副作用工具。
 - **`x_status` 谎报版本**：返回值里的 `version` 写死 `'0.0.1'`，与实际安装的包永远对不上——
   「装的是哪版」这种第一手事实被谎报会把排障带偏（2026-10-01 真机验证时踩到）。
   改为真读 `package.json`（`createRequire`，不依赖打包器），并加单测断言两者必须一致

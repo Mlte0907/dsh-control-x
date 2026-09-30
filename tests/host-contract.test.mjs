@@ -59,6 +59,22 @@ test('全部 21 个工具的 schema 满足宿主 raw JSON Schema 子集', async 
   }
 });
 
+test('无副作用工具的返回值必须满足自己的 output.schema（宿主会校验，缺一个键就判失败）', async () => {
+  // 背景：2026-10-01 真机 E2E 实测，宿主拿 output.schema 校验工具返回值，
+  // x_browser_tabs 返回 {tabs} 而 schema 要求 {ok,tabs}，调用被直接判
+  // "missing required property value.ok"。此前所有测试都直接调 execute()、
+  // 绕过宿主校验，这类不匹配全被放过——注册失败把它一起遮住了。
+  const registered = await allTools();
+  for (const name of ['x_browser_tabs']) {
+    const tool = registered.get(name);
+    const value = await tool.execute({}, { signal: AbortSignal.timeout(15000) });
+    const need = tool.output.schema.required ?? [];
+    const have = Object.keys(value ?? {});
+    const missing = need.filter((key) => !have.includes(key));
+    assert.deepEqual(missing, [], `${name} 返回缺 ${missing.join(',')}（实际键：${have.join(',')}）`);
+  }
+});
+
 test('反向对照：property-map 旧写法必须被自检判红（否则上面的绿是假绿）', async () => {
   const oldStyle = {
     type: 'object',
