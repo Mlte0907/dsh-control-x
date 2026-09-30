@@ -1,0 +1,6 @@
+node_modules/
+*.log
+*.tgz
+.evidence/
+scripts/m1-shot.jpg
+.DS_Store

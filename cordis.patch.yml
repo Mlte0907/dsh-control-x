@@ -1,0 +1,13 @@
+# dsh-control-x bundle patch：插入 profile。
+# 字段与 lib/index.js 的 Config 严格一致（schemastery 校验）。
+# cx-headless 等测试 profile 用 --patch 注入本文件即可；desktop profile 的
+# 正式安装走应用内插件管理（见 docs/INSTALL-DESKTOP.md）。
+- insert:
+    - id: dsh-control-x
+      name: dsh-control-x
+      config:
+        headless: true
+        browserPath: ''
+        ttlMs: 30000
+        allowedApps: []
+        physicalIdleMs: 3000

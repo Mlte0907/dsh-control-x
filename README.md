@@ -1,0 +1,86 @@
+# dsh-control-x
+
+DSH（DeepSeek Harness）插件：为 Agent 提供统一的"控制面"——
+
+- **浏览器半边**：无头（headless）驱动本机 Chrome/Edge（CDP），全程零可见窗口、零焦点抢占；
+- **桌面半边**：Windows UIA 无障碍树观察 + 元素级语义动作，物理输入仅作显式兜底；
+- **不打扰是硬约束**：不弹窗、不抢焦点、不动真实鼠标（详见 [PROPOSAL.md](PROPOSAL.md) §6.7）。
+
+## 安装（新手三步走）
+
+### 第 1 步：安装插件
+
+**桌面端用户（harness-desktop）**：
+
+1. 到本仓库 [Releases](https://github.com/Mlte0907/dsh-control-x/releases) 下载 `dsh-control-x-x.x.x.tgz`；
+2. 打开 DSH 桌面端 → 插件管理（或插件市场）→ 从本地 tarball 安装；
+3. 按提示重启应用。
+
+**CLI 用户（headless / tui / web profile）**：
+
+```sh
+dsh plugin --profile <你的profile名> add https://github.com/Mlte0907/dsh-control-x.git
+```
+
+> desktop profile 被 Electron 应用独占管理，CLI 对它不生效——桌面端请走方式一。
+> 两种方式都要求 Node ≥ 22（DSH 内置运行时已满足）与 Windows 10/11（本插件实测平台）。
+
+### 第 2 步：重启并激活
+
+安装后**重启宿主**，开一个新会话，让 Agent：
+
+```text
+调用 x_activate 激活控制面，然后调用 x_status 告诉我状态
+```
+
+### 第 3 步：加载操作手册
+
+会话中让 Agent 加载 `control-x` skill（内含完整的观察-动作-验证循环教学），之后就能自然地下达任务，例如：
+
+```text
+用无头浏览器打开 bing.com 搜索今天的日期，截图给我
+```
+
+## 卸载
+
+- 桌面端：插件管理里移除；
+- CLI：`dsh plugin --profile <名字> remove dsh-control-x`。
+
+## 状态
+
+**v0.0.1（2026-09-30）**：M0-M4 全部完成——契约锁定、浏览器控制面、桌面语义控制、
+Skill 门控 + 审批护栏 + 物理输入显式打扰路径，四项闭环验收全绿。
+路线图与设计依据见 [PROPOSAL.md](PROPOSAL.md)；宿主 API 契约与平台事实见
+[docs/DSH-SDK-CONTRACT.md](docs/DSH-SDK-CONTRACT.md)；桌面安装细节见
+[docs/INSTALL-DESKTOP.md](docs/INSTALL-DESKTOP.md)；变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+
+### 工具面（激活后 19 + 门控 2）
+
+- 常驻：`x_status` / `x_activate`（门控入口，幂等）
+- 浏览器：`x_browser_tabs` / `x_browser_open` / `x_browser_read` / `x_browser_click` / `x_browser_fill` / `x_browser_press` / `x_browser_scroll` / `x_browser_shot` / `x_browser_wait` / `x_browser_close`
+- 桌面语义（零注入）：`x_desktop_apps` / `x_desktop_tree` / `x_desktop_press` / `x_desktop_value` / `x_desktop_scroll` / `x_desktop_launch`
+- 桌面物理（显式打扰，三重门控）：`x_desktop_mouse_click` / `x_desktop_type` / `x_desktop_key`
+
+### 本地开发
+
+```sh
+npm install            # 依赖（schemastery / playwright-core / koffi）
+npm test               # 宿主外冒烟测试（node --test）
+npm run verify:m1      # 浏览器控制面闭环验收（真实联网）
+npm run verify:m2      # 桌面语义控制闭环验收（启动 charmap 并清理）
+npm run verify:m3      # 门控 + skill + 物理输入闭环验收
+npm run spike:browser  # 无头浏览器驱动探测
+npm run spike:koffi    # FFI 探测（只读）
+npm run spike:uia      # PowerShell UIA 树探测（只读）
+```
+
+测试 profile（cx-headless）中的插件经 pnpm 软链回本目录，改代码即时生效；用
+`dsh --profile cx-headless --patch ./cordis.patch.yml "任务"` 做无头验证。
+
+## 命名约定
+
+工具前缀统一 `x_`（如 `x_status`、`x_browser_*`、`x_desktop_*`）。
+
+## 许可
+
+[MIT](LICENSE)
