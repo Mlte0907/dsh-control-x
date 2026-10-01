@@ -35,20 +35,51 @@ async function allTools() {
   };
 }
 
-test('常驻门控：只有 x_status + x_activate，且激活后共 21 个工具', async (t) => {
-  const before = new Map();
+test('默认启动即注册全部 22 个工具（运行期注册到不了模型面前）', async (t) => {
+  const atBoot = new Map();
   const disposers = [];
   apply({
-    tools: { register: (t) => before.set(t.name, t) },
+    tools: { register: (tool) => atBoot.set(tool.name, tool) },
     logger: { info() {}, warn() {} },
     effect: (fn) => { disposers.push(fn()); },
   }, { headless: true });
   t.after(() => { disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }); });
-  assert.deepEqual([...before.keys()], ['x_status', 'x_activate']);
+  // 2026-10-02 实测：只在 x_activate 之后注册的话，宿主侧注册成功（toolCount=20）
+  // 但模型这一侧的工具表里始终没有它们，重启与新开会话都试过。
+  // 所以默认必须启动即注册，否则等于注册了个寂寞。
+  assert.equal(atBoot.size, 22, 'apply() 结束时工具就该全部就位（2 常驻 + 20 能力）');
+  assert.ok(atBoot.has('x_status') && atBoot.has('x_activate'), '两个门控入口仍在');
+  assert.ok(atBoot.has('x_desktop_apps') && atBoot.has('x_browser_open'), '桌面/浏览器工具必须在启动时就注册');
+});
 
-  const { registered, dispose } = await allTools();
-  t.after(dispose);
-  assert.equal(registered.size, 22, '激活后工具总数（常驻 2 + 能力 20，含 x_vision_describe）');
+test('eagerRegister=false 时退回门控：启动只有 2 个，激活后 22 个', async (t) => {
+  const atBoot = new Map();
+  const disposers = [];
+  const ctx = {
+    tools: { register: (tool) => atBoot.set(tool.name, tool) },
+    logger: { info() {}, warn() {} },
+    effect: (fn) => { disposers.push(fn()); },
+  };
+  apply(ctx, { headless: true, eagerRegister: false });
+  t.after(() => { disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }); });
+  assert.deepEqual([...atBoot.keys()], ['x_status', 'x_activate'], '关掉后启动时只有两个门控');
+  await atBoot.get('x_activate').execute({}, {});
+  assert.equal(atBoot.size, 22, 'x_activate 之后补齐 22 个');
+});
+
+test('x_activate 幂等：启动已注册的情况下再调，新增数为 0', async (t) => {
+  const atBoot = new Map();
+  const disposers = [];
+  apply({
+    tools: { register: (tool) => atBoot.set(tool.name, tool) },
+    logger: { info() {}, warn() {} },
+    effect: (fn) => { disposers.push(fn()); },
+  }, { headless: true });
+  t.after(() => { disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }); });
+  const r = await atBoot.get('x_activate').execute({}, {});
+  assert.equal(r.ok, true);
+  assert.equal(r.toolCount, 0, '已经注册过了，重复调用不该再报新增');
+  assert.equal(atBoot.size, 22, '也不该重复注册');
 });
 
 test('全部 22 个工具的 schema 满足宿主 raw JSON Schema 子集', async (t) => {
