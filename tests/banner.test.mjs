@@ -104,11 +104,11 @@ test('reduced-motion：文字直接完整显示，不做打字动画', async (t)
   t.after(dispose);
   await flush();
   const label = banner().children[0].children[1];
-  assert.match(label.textContent, /^X-Agent 正在操控桌面…/, '一次到位');
-  assert.match(label.textContent, /x_desktop_press/, '带出正在执行的动作名');
+  assert.equal(label.textContent, 'X-Agent 正在操控面...', '一次到位');
+  assert.ok(!label.textContent.includes('x_desktop_press'), '不出现动作名');
 });
 
-test('打字效果：逐字出现，且带闪烁光标', async (t) => {
+test('打字效果：正文立刻出现，只有末尾三个点逐个打出', async (t) => {
   const { banner, dispose } = await load({ snap: { active: true, tool: 'x_desktop_value' } });
   t.after(dispose);
   await flush();
@@ -116,16 +116,11 @@ test('打字效果：逐字出现，且带闪烁光标', async (t) => {
   const label = box.children[1];
   const caret = box.children[2];
   assert.match(caret.style.cssText, /dsh-control-x-blink/, '光标带闪烁动画');
-  await new Promise((r) => setTimeout(r, 130));
-  assert.ok(label.textContent.length > 0, '已经开始打字');
-  assert.ok(label.textContent.length < 20, `此时还没打完（实际 ${JSON.stringify(label.textContent)}）`);
-  // 打字中：屏幕上的是全文的一个前缀（不是另一段文案，也不是从中间开始）
-  assert.ok('X-Agent 正在操控桌面…（x_desktop_value）'.startsWith(label.textContent),
-    `必须是全文前缀（实际 ${JSON.stringify(label.textContent)}）`);
-  // 打字结束后文案完整（轮询等待，不拍脑袋定毫秒数——文案长度一变就会假红）
-  const full = 'X-Agent 正在操控桌面…（x_desktop_value）';
-  await waitFor(() => label.textContent === full, 4000);
-  assert.equal(label.textContent, full);
+  const BASE = 'X-Agent 正在操控面';
+  assert.ok(label.textContent.startsWith(BASE), '正文立刻完整出现，不逐字打');
+  assert.ok(label.textContent.length < BASE.length + 3, `此时点还没打满（实际 ${JSON.stringify(label.textContent)}）`);
+  await waitFor(() => label.textContent === BASE + '...', 4000);
+  assert.equal(label.textContent, BASE + '...');
 });
 
 test('接口挂掉时横幅自己隐藏，不留下假的"正在操控"', async (t) => {

@@ -8,27 +8,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { bannerState, stateSignature, createDesktopBanner } from '../lib/banner-win.js';
+import { bannerState, stateSignature, createDesktopBanner, BANNER_TEXT, BANNER_DOTS } from '../lib/banner-win.js';
 import { createActivityTracker } from '../lib/desktop/activity.js';
 
-const BASE = { active: true, running: true, tool: 'x_desktop_value', kind: 'desktop', since: 1, idleMs: 0, graceMs: 2500 };
+const BASE = { active: true, running: true, tool: 'x_desktop_value', kind: 'desktop', since: 1, idleMs: 0, graceMs: 5000 };
 
-test('桌面活动与浏览器活动给出不同文案', () => {
+test('文案固定且不带工具名（用户 2026-10-01：不要给我多加字）', () => {
   const desk = bannerState(BASE);
   const brow = bannerState({ ...BASE, kind: 'browser', tool: 'x_browser_open' });
-  assert.equal(desk.text, 'X-Agent 正在操控桌面…（x_desktop_value）');
-  assert.equal(brow.text, 'X-Agent 正在使用浏览器…（x_browser_open）');
-  assert.notEqual(desk.text, brow.text, '两类活动不能共用一句话——用户分不出 Agent 在动屏幕还是上网');
+  assert.equal(desk.text, BANNER_TEXT);
+  assert.equal(desk.text, 'X-Agent 正在操控面');
+  assert.equal(brow.text, BANNER_TEXT, '桌面与浏览器共用一句，不因 kind 改文案');
+  assert.ok(!desk.text.includes('x_desktop_value'), '文案里不能出现工具名');
+  assert.ok(!desk.text.includes('（'), '不拼空括号');
+  assert.equal(desk.dots, BANNER_DOTS);
+  assert.equal(desk.dots, '...', '唯一的动画是末尾三个点');
 });
 
 test('不活跃时清空文案（浮窗据此隐藏）', () => {
   const s = bannerState({ ...BASE, active: false, running: false });
   assert.equal(s.text, '');
+  assert.equal(s.dots, '');
   assert.equal(s.active, false);
-});
-
-test('没有工具名时不硬凑一个空括号', () => {
-  assert.equal(bannerState({ ...BASE, tool: '' }).text, 'X-Agent 正在操控桌面…');
 });
 
 test('主题色缺失时退回默认值，不留空串', () => {
@@ -44,10 +45,12 @@ test('变化签名忽略 since/idleMs：否则每 400ms 都会写一次文件', 
   assert.equal(stateSignature(a), stateSignature(b));
 });
 
-test('变化签名能分辨真正要重画的三件事', () => {
+test('变化签名只认"真要重画"的四件事，忽略工具名/活动种类', () => {
   const base = bannerState(BASE);
-  assert.notEqual(stateSignature(base), stateSignature(bannerState({ ...BASE, tool: 'x_browser_open', kind: 'browser' })));
+  // 工具名与 kind 每次动作都在变，纳入签名会让打字动画每步重置。
+  assert.equal(stateSignature(base), stateSignature(bannerState({ ...BASE, tool: 'x_browser_click', kind: 'browser' })));
   assert.notEqual(stateSignature(base), stateSignature(bannerState(BASE, { bg: '#ffffff' })));
+  assert.notEqual(stateSignature(base), stateSignature(bannerState(BASE, { fg: '#000000' })));
   assert.notEqual(stateSignature(base), stateSignature(bannerState({ ...BASE, active: false })));
 });
 

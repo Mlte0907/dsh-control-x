@@ -54,7 +54,8 @@ public static class CxBannerNative {
 [void][CxBannerNative]::SetProcessDPIAware()
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:Full    = ''
+$script:Base    = ''
+$script:Dots    = ''
 $script:Shown   = 0
 $script:Bg      = [System.Drawing.Color]::FromArgb(35, 36, 42)
 $script:Fg      = [System.Drawing.Color]::FromArgb(238, 238, 238)
@@ -86,7 +87,7 @@ $form.BackColor      = $script:Bg
 $form.Text           = 'dsh-control-x-banner'
 $form.Name           = 'dsh-control-x-banner'
 $form.Size           = New-Object System.Drawing.Size(420, $height)
-$form.Opacity        = 0.97
+$form.Opacity        = 0.82
 
 $form.Add_Shown({
   $h = $form.Handle
@@ -124,15 +125,18 @@ $form.Add_Paint({
   $g.FillEllipse($brush, $padX, $cy, $dotSize, $dotSize)
   $brush.Dispose()
 
-  $text = if ($script:Shown -ge $script:Full.Length) { $script:Full } else { $script:Full.Substring(0, $script:Shown) }
+  # Base shows instantly; only the trailing dots are typed out (user spec 2026-10-01:
+  # "I only want the '...' three dots to have a typing effect").
+  $typed = if ($script:Shown -ge $script:Dots.Length) { $script:Dots } else { $script:Dots.Substring(0, $script:Shown) }
+  $text = $script:Base + $typed
   $size = [System.Windows.Forms.TextRenderer]::MeasureText($g, $text, $font)
   $tx = $padX + $dotSize + $gap
   $ty = [int](($form.Height - $size.Height) / 2)
   [System.Windows.Forms.TextRenderer]::DrawText($g, $text, $font, (New-Object System.Drawing.Point($tx, $ty)), $script:Fg)
 
   $cx = $tx + $size.Width + 2
-  if ($script:Full.Length -gt 0) {
-    $on = if ($script:Shown -lt $script:Full.Length) { $true } else { ((Get-Date).Millisecond % 800) -lt 400 }
+  if ($script:Base.Length -gt 0) {
+    $on = if ($script:Shown -lt $script:Dots.Length) { $true } else { ((Get-Date).Millisecond % 800) -lt 400 }
     if ($on) {
       $cb = New-Object System.Drawing.SolidBrush $script:Fg
       $g.FillRectangle($cb, $cx, $ty + 2, 2, [int]($font.Size * 1.35))
@@ -145,7 +149,7 @@ $form.Add_Paint({
 function Set-CxGeometry {
   try {
     $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
-  $measure = $script:Full
+  $measure = $script:Base + $script:Dots
   if ($measure.Length -gt 40) { $measure = $measure.Substring(0, 40) }
   $bmp = New-Object System.Drawing.Bitmap 8, 8
   $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -156,7 +160,7 @@ function Set-CxGeometry {
   if ($w -lt 240) { $w = 240 }
   if ($w -gt 900) { $w = 900 }
   $form.Size = New-Object System.Drawing.Size -ArgumentList $w, $height
-  $form.Region = New-CxRoundedRegion $w $height 20
+  $form.Region = New-CxRoundedRegion $w $height 8
   $locX = [int]($vs.Left + ($vs.Width - $w) / 2)
   $locY = [int]($vs.Top + 18)
   $form.Location = New-Object System.Drawing.Point -ArgumentList $locX, $locY
@@ -187,14 +191,19 @@ $timer.Add_Tick({
       $fg = Convert-CxColor $state.fg $script:Fg
       if ($bg -ne $script:Bg) { $script:Bg = $bg; $form.BackColor = $bg }
       if ($fg -ne $script:Fg) { $script:Fg = $fg }
-      $text = [string]$state.text
-      if ($text -ne $script:Full) {
-        $script:Full = $text
+      $base = [string]$state.text
+      $dots = [string]$state.dots
+      if ($base -ne $script:Base) {
+        $script:Base = $base
+        $script:Dots = $dots
         $script:Shown = 0
         try { Set-CxGeometry } catch { }
+      } elseif ($dots -ne $script:Dots) {
+        $script:Dots = $dots
+        $script:Shown = 0
       }
     }
-    if ($wantVisible -and $script:Shown -lt $script:Full.Length) { $script:Shown = $script:Shown + 1 }
+    if ($wantVisible -and $script:Shown -lt $script:Dots.Length) { $script:Shown = $script:Shown + 1 }
     if ($wantVisible) { try { Set-CxGeometry } catch { } }
 
     if ($wantVisible -ne $script:Visible) {
