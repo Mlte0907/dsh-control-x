@@ -6,6 +6,40 @@ import assert from 'node:assert/strict';
 import { createActivityTracker, withActivity, DEFAULT_GRACE_MS } from '../lib/desktop/activity.js';
 import { WatchServer } from '../lib/browser/watch.js';
 
+test('onBegin 钩子：动作开始时触发，且触发时快照已经是"活跃"（横幅第一帧就要画得出）', () => {
+  // 横幅浮窗靠这个钩子按需拉起。若在 begin() 里先调钩子、后更新状态，
+  // 浮窗起来读到的第一帧会是"空闲"，用户看不到本次动作的横幅。
+  let t = 0;
+  const seen = [];
+  let activeAtHook = null;
+  const act = createActivityTracker({
+    now: () => t,
+    onBegin: (tool, kind) => {
+      activeAtHook = act.snapshot().active;
+      seen.push([tool, kind]);
+    },
+  });
+  act.begin('x_browser_open', 'browser');
+  assert.deepEqual(seen, [['x_browser_open', 'browser']], '工具名与活动种类要传给订阅者');
+  assert.equal(activeAtHook, true, '钩子触发时快照必须已经是 active');
+  assert.equal(act.snapshot().tool, 'x_browser_open');
+
+  act.end('x_browser_open');
+  act.begin('x_desktop_press', 'desktop');
+  assert.deepEqual(seen[1], ['x_desktop_press', 'desktop']);
+  assert.equal(act.snapshot().kind, 'desktop');
+});
+
+test('没有 onBegin 时行为不变（订阅是可选的）', () => {
+  let t = 1000;
+  const act = createActivityTracker({ now: () => t });
+  act.begin('x_desktop_press', 'desktop');
+  t += 10;
+  act.end('x_desktop_press');
+  assert.equal(act.snapshot().active, true, '仍在宽限期内');
+  assert.equal(act.snapshot().kind, 'desktop');
+});
+
 test('活动跟踪：宽限期内保持 active，过期后自动撤销', () => {
   let t = 1000;
   const act = createActivityTracker({ now: () => t });

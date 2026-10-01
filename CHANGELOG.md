@@ -1,5 +1,52 @@
 # 更新日志
 
+## 0.5.4（2026-10-01）
+
+**横幅浮窗改为按需拉起：不操控就零进程。**
+
+### 改了什么
+
+用户要求「让横幅在 agent 操控的时候才加载，不随 DSH 启动而启动」。原来是 `apply()` 里
+直接 `banner.start()`，浮窗随宿主启动就常驻——即使从头到尾没操控过，也留一个 PowerShell
+进程每 500ms 读一次状态文件。
+
+- `createActivityTracker` 新增 `onBegin(tool, kind)` 钩子，在 `begin()` **末尾**触发
+  （状态已更新之后，订阅者读 `snapshot()` 看到的就是"活跃"——浮窗第一帧就画得出，
+  不会先空一帧再补）。
+- `apply()` 不再直接 `start()`，改为挂在 `onBegin` 上：**第一次真的动手才拉起浮窗**。
+- `createDesktopBanner` 新增 `idleExitMs`（默认 120000）：停手够久后**自己退出**并清掉临时目录，
+  下次操控再拉起。退出后 `statePath` 归 null。
+- `start()` 加幂等闸：按需拉起意味着它会被每个动作调一次，没有这道闸会一路 spawn 出
+  第二个 PowerShell，界面上变成两个横幅叠着。
+- 重新拉起时重置 `lastActiveAt`，否则一个久未活动的浮窗起来立刻又自杀。
+- 新增配置项 `bannerIdleExitMs` 与设置页「横幅空闲退出（毫秒）」，0 = 用过一次就不再退出。
+  `x_status` 的 config 块也补上 `desktopBanner` / `bannerIdleExitMs`。
+
+### 退出时刻是 graceMs + idleExitMs，不是 idleExitMs
+
+`lastActiveAt` 记的是「横幅最后一次**可见**」的时刻，而横幅在最后一次动作后还要靠
+`graceMs`（5 秒）继续停留。所以停手后真正退出的时刻是 `5s + idleExitMs`。
+这是刻意的：宽限期内横幅还显示着，不该在它正显示时把进程杀掉。
+
+### 验证
+
+- **真进程端到端**（`.evidence/lazy-e2e.mjs`，真实 spawn PowerShell）：
+  未操控 `available=false / statePath=null` → 第一次操控自动拉起（真实目录+进程）
+  → 停手超过 `graceMs+idleExitMs` 后 `available=false / statePath=null` → 第二次操控重新拉起。
+  全程结束 **0 残留进程、0 残留目录**。
+- 单测 **55/55**（新增 3 条：按需拉起+幂等+超时退出、`apply()` 里 `banner.start()` 只能出现一次、
+  `onBegin` 触发时快照已 active）。
+- 宿主契约门 22/22，m1 14 步 / m2 / m3 全过。
+- 跑完全套与验收脚本后 `%TEMP%` 零新增目录、零新增进程。
+
+### 已知（非本插件代码问题）
+
+`npm run selfcheck` 会报一条：profile 的 `cordis.patch.yml` 里存在顶层 `- id: dsh-control-x` 条目，
+而插件是 bundle（自带 `cordis.patch.yml`，宿主自动应用包内 patch）→ 同 id 双声明。
+实测是 **2026-10-01 22:47 市场安装 0.5.3 时写进 profile 的**，插件本身仍正常挂载
+（`/api/x-control/*` 全部 200）。但历史上市场更新正是因此报过
+「duplicate loader entry id "dsh-control-x" (2 rows)」并回滚，值得在下次更新前处理。
+
 ## 0.5.3（2026-10-01）
 
 **修掉一个真 bug：横幅浮窗从启动起就钉在桌面左上角不消失。**

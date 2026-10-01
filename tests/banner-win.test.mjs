@@ -94,6 +94,67 @@ test('没 start() 就不建临时目录（否则没走 stop() 的调用方会留
   banner.stop();
 });
 
+test('按需拉起：没 start() 就不起进程；重复 start 幂等；停手超时会自己退出', (t) => {
+  // 2026-10-01：横幅原本随 DSH 启动就常驻。现在改成第一次操控才拉起、
+  // 停手 idleExitMs 后自己退出。start() 会被每次动作调用，没有幂等闸就会
+  // 一路 spawn 出第二个 powershell，界面上变成两个横幅叠着。
+  let clock = 0;
+  let spawned = 0;
+  let killed = 0;
+  let tickFn = null;
+  const activity = createActivityTracker({ graceMs: 0, now: () => clock });
+  const banner = createDesktopBanner({
+    activity,
+    idleExitMs: 1000,
+    now: () => clock,
+    spawnImpl: () => { spawned += 1; return { unref() {}, on() {}, kill() { killed += 1; } }; },
+    // 与 setInterval(callback, ms) 同序：第一个参数就是回调。
+    setIntervalImpl: (fn) => { tickFn = fn; return { unref() {} }; },
+    clearIntervalImpl: () => {},
+  });
+  t.after(() => banner.stop());
+
+  assert.equal(banner.available, false, '没 start() 就不该有进程');
+  assert.equal(spawned, 0);
+
+  banner.start();
+  assert.equal(spawned, 1);
+  banner.start();
+  banner.start();
+  assert.equal(spawned, 1, '重复 start 不能重复拉进程（否则界面上是两个叠加的横幅）');
+  assert.equal(banner.available, true);
+
+  // 一次真实操控：活跃期间 tick 什么都不做。
+  activity.begin('x_desktop_press', 'desktop');
+  clock += 10;
+  tickFn();
+  assert.equal(banner.available, true, '正在操控时不能退出');
+
+  // 停手超过 idleExitMs：自己退掉。
+  activity.end('x_desktop_press');
+  clock += 2000;
+  tickFn();
+  assert.equal(banner.available, false, '停手超过 idleExitMs 应自己退出');
+  assert.equal(killed, 1, '退出要真的 kill 掉 powershell 进程');
+
+  // 下次操控能重新拉起（且不会因为 lastActiveAt 是旧的而刚起来就自杀）。
+  clock += 5000;
+  activity.begin('x_desktop_press', 'desktop');
+  banner.start();
+  assert.equal(spawned, 2, '下次操控应能重新拉起');
+  clock += 10;
+  tickFn();
+  assert.equal(banner.available, true, '刚拉起就自杀 = lastActiveAt 没重置');
+});
+
+test('apply() 不得在加载时就拉横幅（按需：只有 onBegin 里那一处 start）', () => {
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8');
+  const calls = src.match(/banner\.start\(\)/g) ?? [];
+  assert.equal(calls.length, 1, `banner.start() 出现 ${calls.length} 次，只允许 onBegin 钩子里那一次；` +
+    '在 apply() 里直接调就又变成随 DSH 启动常驻了');
+  assert.match(src, /onBegin:/, '横幅必须挂在活动跟踪器的 onBegin 上才会被按需拉起');
+});
+
 test('浮窗脚本不含 CJK 字面量（Windows PowerShell 无 BOM 按 ANSI 解码会解析失败）', () => {
   const src = readFileSync(new URL('../lib/banner-overlay.ps1', import.meta.url), 'utf8');
   const offenders = [...src].filter((ch) => /[^\x00-\x7F]/.test(ch));
