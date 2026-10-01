@@ -55,11 +55,10 @@ public static class CxBannerNative {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:Base    = ''
-$script:Dots    = ''
-$script:Shown   = 0
 $script:Bg      = [System.Drawing.Color]::FromArgb(35, 36, 42)
 $script:Fg      = [System.Drawing.Color]::FromArgb(238, 238, 238)
 $script:Visible = $false
+$script:LastDot = $null
 
 # Status dot cycles red -> amber -> blue, one colour every 2s (user spec 2026-10-01).
 # Phase is taken off the wall clock, so switches land on whole seconds instead of
@@ -143,31 +142,21 @@ $form.Add_Paint({
   $g.FillEllipse($brush, $padX, $cy, $dotSize, $dotSize)
   $brush.Dispose()
 
-  # Base shows instantly; only the trailing dots are typed out (user spec 2026-10-01:
-  # "I only want the '...' three dots to have a typing effect").
-  $typed = if ($script:Shown -ge $script:Dots.Length) { $script:Dots } else { $script:Dots.Substring(0, $script:Shown) }
-  $text = $script:Base + $typed
+  # No typing animation and no blinking caret (user spec 2026-10-02: "remove the
+  # typing effect"; the caret blinked at 1.25 Hz and read as the banner flickering).
+  # The only animation left is the status dot's red/amber/blue cycle.
+  $text = $script:Base
   $size = [System.Windows.Forms.TextRenderer]::MeasureText($g, $text, $font)
   $tx = $padX + $dotSize + $gap
   $ty = [int](($form.Height - $size.Height) / 2)
   [System.Windows.Forms.TextRenderer]::DrawText($g, $text, $font, (New-Object System.Drawing.Point($tx, $ty)), $script:Fg)
-
-  $cx = $tx + $size.Width + 2
-  if ($script:Base.Length -gt 0) {
-    $on = if ($script:Shown -lt $script:Dots.Length) { $true } else { ((Get-Date).Millisecond % 800) -lt 400 }
-    if ($on) {
-      $cb = New-Object System.Drawing.SolidBrush $script:Fg
-      $g.FillRectangle($cb, $cx, $ty + 2, 2, [int]($font.Size * 1.35))
-      $cb.Dispose()
-    }
-  }
   $border.Dispose()
 })
 
 function Set-CxGeometry {
   try {
     $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
-  $measure = $script:Base + $script:Dots
+  $measure = $script:Base
   if ($measure.Length -gt 40) { $measure = $measure.Substring(0, 40) }
   $bmp = New-Object System.Drawing.Bitmap 8, 8
   $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -177,11 +166,21 @@ function Set-CxGeometry {
   $w = $padX * 2 + $dotSize + $gap + $size.Width + 18
   if ($w -lt 240) { $w = 240 }
   if ($w -gt 900) { $w = 900 }
-  $form.Size = New-Object System.Drawing.Size -ArgumentList $w, $height
-  $form.Region = New-CxRoundedRegion $w $height 8
   $locX = [int]($vs.Left + ($vs.Width - $w) / 2)
   $locY = [int]($vs.Top + 18)
-  $form.Location = New-Object System.Drawing.Point -ArgumentList $locX, $locY
+  # Only assign when the value actually changed. Assigning Size or Region forces
+  # Windows to rebuild and repaint the whole window, and the tick calls this ~11
+  # times a second -- so an unconditional assignment made the banner blank out
+  # every frame or two (measured: content present in only 163/200 samples while
+  # IsWindowVisible never changed, i.e. the whole content layer was intermittently
+  # not painted). Idempotent assignment is the whole fix.
+  if ($form.Width -ne $w -or $form.Height -ne $height) {
+    $form.Size = New-Object System.Drawing.Size -ArgumentList $w, $height
+    $form.Region = New-CxRoundedRegion $w $height 8
+  }
+  if ($form.Left -ne $locX -or $form.Top -ne $locY) {
+    $form.Location = New-Object System.Drawing.Point -ArgumentList $locX, $locY
+  }
   } catch {
     throw
   }
@@ -204,7 +203,7 @@ function Read-CxState() {
 
 $timer.Add_Tick({
   # One bad frame must never cost us the banner: every stage is isolated so a
-  # geometry failure cannot stall the typing counter or the show/hide state.
+  # geometry failure cannot stall the show/hide state.
   try {
     $state = Read-CxState
 
@@ -216,18 +215,11 @@ $timer.Add_Tick({
       if ($bg -ne $script:Bg) { $script:Bg = $bg; $form.BackColor = $bg }
       if ($fg -ne $script:Fg) { $script:Fg = $fg }
       $base = [string]$state.text
-      $dots = [string]$state.dots
       if ($base -ne $script:Base) {
         $script:Base = $base
-        $script:Dots = $dots
-        $script:Shown = 0
         try { Set-CxGeometry } catch { }
-      } elseif ($dots -ne $script:Dots) {
-        $script:Dots = $dots
-        $script:Shown = 0
       }
     }
-    if ($wantVisible -and $script:Shown -lt $script:Dots.Length) { $script:Shown = $script:Shown + 1 }
     if ($wantVisible) { try { Set-CxGeometry } catch { } }
 
     # Drive visibility from the form's ACTUAL state, not from a cached flag.
@@ -244,9 +236,14 @@ $timer.Add_Tick({
       if ($form.Visible) { $form.Hide() }
     }
     $script:Visible = $wantVisible
-    if ($script:Visible) { $form.Invalidate() }
-    # Idle most of the time, so poll slowly while hidden and only spin up while typing.
-    $timer.Interval = if ($script:Visible) { 80 } else { 500 }
+    # The only thing that still has to repaint every frame is the status dot's
+    # colour cycle. When it is off (inactive, or the cycle is settled) there is
+    # nothing to redraw, so skip Invalidate entirely -- a needless repaint is how
+    # the content layer used to blink.
+    if ($script:Visible) {
+      $now = Get-CxDotColor
+      if ($now -ne $script:LastDot) { $script:LastDot = $now; $form.Invalidate() }
+    }
   } catch {
     # Deliberately silent: a bad frame must not kill the overlay, and there is no
     # one to read a console here. The next tick retries from a clean slate.
@@ -262,7 +259,6 @@ $timer.Add_Tick({
 $pre = Read-CxState
 if ($null -ne $pre -and $pre.active -eq $true) {
   $script:Base = [string]$pre.text
-  $script:Dots = [string]$pre.dots
   $bg = Convert-CxColor $pre.bg $script:Bg
   $fg = Convert-CxColor $pre.fg $script:Fg
   $script:Bg = $bg

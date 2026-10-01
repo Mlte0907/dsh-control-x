@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { bannerState, stateSignature, createDesktopBanner, BANNER_TEXT, BANNER_DOTS, DOT_COLORS, DOT_CYCLE_MS } from '../lib/banner-win.js';
+import { bannerState, stateSignature, createDesktopBanner, BANNER_TEXT, DOT_COLORS, DOT_CYCLE_MS } from '../lib/banner-win.js';
 import { createActivityTracker } from '../lib/desktop/activity.js';
 
 const BASE = { active: true, running: true, tool: 'x_desktop_value', kind: 'desktop', since: 1, idleMs: 0, graceMs: 5000 };
@@ -23,14 +23,15 @@ test('文案固定且不带工具名（用户 2026-10-01：不要给我多加字
   assert.equal(brow.text, BANNER_TEXT, '桌面与浏览器共用一句，不因 kind 改文案');
   assert.ok(!desk.text.includes('x_desktop_value'), '文案里不能出现工具名');
   assert.ok(!desk.text.includes('（'), '不拼空括号');
-  assert.equal(desk.dots, BANNER_DOTS);
-  assert.equal(desk.dots, '...', '唯一的动画是末尾三个点');
+  // 打字效果与三个点已在 2026-10-02 去掉，状态里不该再有 dots 字段。
+  assert.equal(desk.dots, undefined, '不再有打字动画，dots 字段应当整个消失');
+  assert.ok(!BANNER_TEXT.includes('.'), '文案本身不带动画尾巴');
 });
 
 test('不活跃时清空文案（浮窗据此隐藏）', () => {
   const s = bannerState({ ...BASE, active: false, running: false });
   assert.equal(s.text, '');
-  assert.equal(s.dots, '');
+  assert.equal(s.dots, undefined);
   assert.equal(s.active, false);
 });
 
@@ -49,7 +50,7 @@ test('变化签名忽略 since/idleMs：否则每 400ms 都会写一次文件', 
 
 test('变化签名只认"真要重画"的四件事，忽略工具名/活动种类', () => {
   const base = bannerState(BASE);
-  // 工具名与 kind 每次动作都在变，纳入签名会让打字动画每步重置。
+  // 工具名与 kind 每次动作都在变，纳入签名会让状态文件每步重写。
   assert.equal(stateSignature(base), stateSignature(bannerState({ ...BASE, tool: 'x_browser_click', kind: 'browser' })));
   assert.notEqual(stateSignature(base), stateSignature(bannerState(BASE, { bg: '#ffffff' })));
   assert.notEqual(stateSignature(base), stateSignature(bannerState(BASE, { fg: '#000000' })));

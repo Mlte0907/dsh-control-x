@@ -99,28 +99,38 @@ test('背景框用宿主主题变量（切浅/深主题自动跟随），且不�
     '本机 brand 变量解析成白色，不能用它当背景');
 });
 
-test('reduced-motion：文字直接完整显示，不做打字动画', async (t) => {
-  const { banner, dispose } = await load({ reduceMotion: true, snap: { active: true, tool: 'x_desktop_press' } });
-  t.after(dispose);
-  await flush();
-  const label = banner().children[0].children[1];
-  assert.equal(label.textContent, 'X-Agent正在控制电脑，操控键鼠会打断操作...', '一次到位');
-  assert.ok(!label.textContent.includes('x_desktop_press'), '不出现动作名');
-});
-
-test('打字效果：正文立刻出现，只有末尾三个点逐个打出', async (t) => {
+test('文字一次到位，且没有打字动画也没有光标（用户 2026-10-02）', async (t) => {
   const { banner, dispose } = await load({ snap: { active: true, tool: 'x_desktop_value' } });
   t.after(dispose);
   await flush();
   const box = banner().children[0];
   const label = box.children[1];
-  const caret = box.children[2];
-  assert.match(caret.style.cssText, /dsh-control-x-blink/, '光标带闪烁动画');
   const BASE = 'X-Agent正在控制电脑，操控键鼠会打断操作';
-  assert.ok(label.textContent.startsWith(BASE), '正文立刻完整出现，不逐字打');
-  assert.ok(label.textContent.length < BASE.length + 3, `此时点还没打满（实际 ${JSON.stringify(label.textContent)}）`);
-  await waitFor(() => label.textContent === BASE + '...', 4000);
-  assert.equal(label.textContent, BASE + '...');
+
+  // 结构上：只有圆点 + 文字两个孩子。闪烁的光标以 1.25Hz 闪，被用户当成
+  // 横幅本身在闪，已经连同打字效果一起去掉。
+  assert.equal(box.children.length, 2, `横幅内应只剩圆点与文字（实际 ${box.children.length} 个元素）`);
+  for (const child of Array.from(box.children)) {
+    assert.doesNotMatch(String(child.style && child.style.cssText), /dsh-control-x-blink/,
+      '不得再有闪烁光标动画');
+  }
+
+  assert.equal(label.textContent, BASE, '文字一次到位，没有逐字/逐点动画');
+  // 多等一会儿：文字必须一直不变，不存在"先短后长"的打字过程。
+  await new Promise((r) => setTimeout(r, 600));
+  assert.equal(label.textContent, BASE, '600ms 后仍是完整文案（没有打字过程）');
+});
+
+test('reduced-motion：圆点固定为单一颜色，不做变色循环', async (t) => {
+  const { banner, dispose } = await load({ reduceMotion: true, snap: { active: true, tool: 'x_desktop_press' } });
+  t.after(dispose);
+  await flush();
+  const dot = banner().children[0].children[0];
+  const label = banner().children[0].children[1];
+  assert.match(dot.style.cssText, /background:#3b82f6/, 'reduced-motion 下固定蓝色');
+  assert.doesNotMatch(dot.style.cssText, /animation:/, 'reduced-motion 下不跑变色动画');
+  assert.equal(label.textContent, 'X-Agent正在控制电脑，操控键鼠会打断操作');
+  assert.ok(!label.textContent.includes('x_desktop_press'), '不出现动作名');
 });
 
 test('接口挂掉时横幅自己隐藏，不留下假的"正在操控"', async (t) => {
