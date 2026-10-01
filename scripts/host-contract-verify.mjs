@@ -144,5 +144,17 @@ await tools.get('x_activate').execute({}, {});
 
 assert(rejected.length === 0, `全部工具通过宿主注册门（拒绝 ${rejected.length} 个）`);
 for (const line of rejected) console.log(`      ✘ ${line}`);
-assert(accepted.length === 21, `注册工具总数 = ${accepted.length}（常驻 2 + 能力 19）`);
+// 期望的工具名逐个点名，而不是只比一个总数：加了工具忘了改数字会红，
+// 但删了某个工具只改数字也能混过去——点名让"少一个"和"多一个"都看得见。
+const EXPECTED = [
+  'x_status', 'x_activate',
+  'x_browser_tabs', 'x_browser_open', 'x_browser_read', 'x_browser_click', 'x_browser_fill',
+  'x_browser_press', 'x_browser_scroll', 'x_browser_shot', 'x_browser_wait', 'x_browser_close',
+  'x_desktop_apps', 'x_desktop_tree', 'x_desktop_press', 'x_desktop_value', 'x_desktop_scroll',
+  'x_desktop_launch', 'x_desktop_mouse_click', 'x_desktop_type', 'x_desktop_key',
+  'x_vision_describe',
+];
+assert(accepted.length === EXPECTED.length, `注册工具总数 = ${accepted.length}（期望 ${EXPECTED.length}）`);
+const missing = EXPECTED.filter((name) => !accepted.includes(name));
+assert(missing.length === 0, `缺席的工具：${missing.join(', ') || '无'}`);
 console.log(`\n宿主契约验收通过：${accepted.join(', ')}`);

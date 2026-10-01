@@ -77,12 +77,13 @@ UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 
 变更历史见 [CHANGELOG.md](CHANGELOG.md)；宿主 API 与平台事实见
 [docs/DSH-SDK-CONTRACT.md](docs/DSH-SDK-CONTRACT.md)。
 
-### 工具面（激活后 19 + 门控 2）
+### 工具面（激活后 20 + 门控 2）
 
 - 常驻：`x_status` / `x_activate`（门控入口，幂等）
 - 浏览器：`x_browser_tabs` / `x_browser_open` / `x_browser_read` / `x_browser_click` / `x_browser_fill` / `x_browser_press` / `x_browser_scroll` / `x_browser_shot` / `x_browser_wait` / `x_browser_close`
 - 桌面语义（零注入）：`x_desktop_apps` / `x_desktop_tree` / `x_desktop_press` / `x_desktop_value` / `x_desktop_scroll` / `x_desktop_launch`
 - 桌面物理（显式打扰，三重门控）：`x_desktop_mouse_click` / `x_desktop_type` / `x_desktop_key`
+- 视觉：`x_vision_describe`（截图 → 视觉模型 → 文字描述，给不支持图片输入的会话模型补眼睛；模型在设置页选，默认「系统推荐」）
 
 ### 本地开发
 

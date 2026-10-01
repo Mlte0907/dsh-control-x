@@ -1,5 +1,49 @@
 # 更新日志
 
+## 0.5.0（2026-10-01）
+
+**视觉模型：给不支持图片输入的会话模型补一双眼睛。**
+
+起因是实测：本会话模型 `space-bunny-free` 对 `read_image` 的拒绝原话是
+「model "space-bunny-free" does not declare image input」——**注意是"没声明"，不是"不支持"**。
+宿主按模型路由里声明的 `inputModalities` 决定放不放图片；截图工具能拍出真图
+（实测 1280×800、9274 种颜色的真实渲染），但图片内容到不了纯文本模型。
+同一个 profile 里 `mimo-v2.6-flash` / `mimo-v2.5` 的路由本就声明了 `image`。
+
+### 新增
+
+- **`x_vision_describe`**：把截图交给视觉模型，换回**文字**描述给 Agent 读。
+  先 `x_browser_shot` 拿 `image` 引用再传进来，或直接给 `tab_id` 让它现拍一张。
+- **设置页「视觉模型」下拉**：选项来自宿主**已添加且声明支持图片**的模型
+  （服务端 `GET /vision-models` → `ctx.llm.listProviders()` + `listModels(provider)`，
+  按 `inputModalities` 含 `image` 过滤）。默认 **「系统推荐」**（取宿主适配器偏好序的首个）
+  与 **「随机」**（每次调用重新摇，避免某个模型抽风时一直卡着）；也可指定某个 `provider/model`。
+  取不到模型列表时**明说不可用**，不给一个永远空着的下拉装正常——那是本次事故同款的假绿。
+- `x_status` 增加 `visionModel` 字段，设置值可直接读到。
+
+### 契约依据（全部来自宿主源码/文档，非猜测）
+
+- `ctx.llm.listProviders()` / `listModels(provider)` → `[{provider,id,name,inputModalities?}]`
+- `for await (const chunk of ctx.llm.stream({ provider, model, messages }))`，
+  `messages` 收 request-only 的 `{role:'user', content:[{type:'text',...}]}`
+- 图片以**持久化附件引用**进 messages（与本插件 `x_browser_shot` 的 image block 同源，
+  该路径已被真机验证过：宿主收下后落盘成 `~/.dsh/attachments/v1/objects/…`）。
+  这是本功能唯一带推断成分的一处，故所有宿主错误**原样上抛并点名模型**，
+  不做静默降级——字段名若不符，第一次真机就会给出可直接定位的真话。
+
+### 验证
+
+单测 22 项新增、全量 **40/40**；宿主真校验器 **22/22**（工具名逐个点名，
+并做了反向对照：删掉一个名字验收即红）；m1/m2/m3 与 selfcheck 全绿。
+
+### 待你决定（比插件更重要）
+
+`space-bunny-free` 的路由现在写的是 `input: [text]`。若该模型网关确实提供图片，
+在 profile 的 `cordis.patch.yml` 给它加 `image`（乃至 `video`）后重启，
+本会话就能**直接看图**，插件这条兜底链就不必上场。
+适配器 README 的警告要一并记住：**「A modality declaration is not verified」**——
+声明了但网关不提供，会在请求时被 provider 拒绝而不是本地报错。
+
 ## 0.4.0（2026-10-01）
 
 **顶部横幅：Agent 正在操控本机桌面时，界面顶部一直可见的提示。**

@@ -37,10 +37,10 @@ test('常驻门控：只有 x_status + x_activate，且激活后共 21 个工具
   assert.deepEqual([...before.keys()], ['x_status', 'x_activate']);
 
   const registered = await allTools();
-  assert.equal(registered.size, 21, '激活后工具总数');
+  assert.equal(registered.size, 22, '激活后工具总数（常驻 2 + 能力 20，含 x_vision_describe）');
 });
 
-test('全部 21 个工具的 schema 满足宿主 raw JSON Schema 子集', async () => {
+test('全部 22 个工具的 schema 满足宿主 raw JSON Schema 子集', async () => {
   const registered = await allTools();
   const failures = [];
   for (const tool of registered.values()) {

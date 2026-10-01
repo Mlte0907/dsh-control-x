@@ -51,7 +51,7 @@ assert(skillRegistered?.name === CONTROL_X_SKILL.name && skillRegistered.content
 
 // ── 2. 激活 ──
 const act1 = await registered.get('x_activate').execute({}, { signal: AbortSignal.timeout(10000) });
-assert(act1.activated && act1.toolCount === 19, `激活：新注册 ${act1.toolCount} 个工具`);
+assert(act1.activated && act1.toolCount === 20, `激活：新注册 ${act1.toolCount} 个工具（浏览器 10 + 桌面 9 + 视觉 1）`);
 const act2 = await registered.get('x_activate').execute({}, { signal: AbortSignal.timeout(10000) });
 assert(act2.toolCount === 0, `幂等：重复激活注册 0 个`);
 const status = await registered.get('x_status').execute({}, {});
