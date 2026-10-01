@@ -1,5 +1,60 @@
 # 更新日志
 
+## 0.6.0（2026-10-01）
+
+**横幅改成真正的桌面置顶浮窗；Agent 一用浏览器就自动弹出右侧栏。**
+
+起因是两条用户实测反馈：「桌面横幅没有提示」「侧边栏并没有弹出使用浏览器」。
+逐条查证后，两条都不是"没实现"，而是实现方式在真实使用场景里够不着：
+
+### 诊断（先证据后改法）
+
+- **横幅本来是好的**：实测触发一次 `x_desktop_*` 并在 2.5s 宽限期内截图，
+  清楚看到圆角框 + 蓝点 + `X-Agent 正在操控中...（x_desktop_apps）`。
+  服务端 `/api/x-control/activity` 也如实返回 `{"active":true,"tool":"x_desktop_apps"}`。
+  真因是：网页里的 `position:fixed` 横幅只存在于 **DSH 窗口的渲染层**。
+  Agent 操控记事本时用户盯着记事本、DSH 窗口在后面，横幅被压在下面看不见。
+- **侧边栏从不会自动弹**：代码里根本没有"打开面板"的路径，只有入口。
+  另核实了注册契约本身没问题——在 `app.asar` 里读到宿主
+  `dsh-client-ui-sidebar-right/lib/client.js` 的注册门（`DEFAULT_BAND="extension"`、
+  `sidebar.right.pane.tab` / `.title` 两个 keyed seat 均存在），与官方
+  `dsh-client-ui-plan` / `dsh-client-ui-schedule` / `dsh-client-ui-sidebar-browser`
+  的写法一致，不存在"因为字段不对所以静默不显示"。
+
+### 变更
+
+- **桌面置顶横幅（Windows 原生浮窗）**：新增 `lib/banner-win.js` +
+  `lib/banner-overlay.ps1`。无边框、`TopMost`、**点击穿透**（`WS_EX_TRANSPARENT`）、
+  不抢焦点（`WS_EX_NOACTIVATE`）、不进 Alt+Tab（`WS_EX_TOOLWINDOW`）、DPI 感知、
+  圆角、打字机 + 闪烁光标。宿主侧持有活动快照，**只在状态变化时**写状态文件，
+  浮窗自己轮询渲染——不在浮窗里发 HTTP。
+- **主题色跟随**：原生浮窗读不到 `--dsw-alias-*` 这类 CSS 变量，改为客户端解析后
+  经 `POST /activity-theme` 上报，切深/浅色自动跟随（`MutationObserver` 监听
+  `data-ds-dark-theme`）。服务端只接受 `#RGB/#RRGGBB/#AARRGGBB`，非法值丢弃。
+- **浏览器活动也进横幅**：原先只跟踪 `x_desktop_*`，浏览器动作对用户完全不可见。
+  现在 `x_browser_*` 以 `kind='browser'` 计入，文案区分为「正在操控桌面…」与
+  「正在使用浏览器…」。
+- **浏览器活跃时自动弹出右侧栏**：一轮活动只弹一次，不做每 600ms 重复 openTab。
+- **网页内横幅降级为回退**：`/activity` 报 `overlay=true` 时网页那份主动隐藏，
+  两个横幅叠在一起比一个更糟；原生浮窗起不来（非 Windows / PowerShell 缺失）
+  才回落到网页横幅。
+- 设置页新增「桌面置顶横幅」开关（`desktopBanner`，默认开）。
+
+### 修复（实测踩到，全部有据）
+
+- `Timer` 创建后是**静止**的，不调 `Start()` 就没有打字动画——表现为一个空框
+  永远停在左上角。已加断言锁住。
+- Windows PowerShell 5.1 在**无 BOM** 时按 ANSI 解码 `.ps1`，脚本里的中文
+  字面量被打散成解析错误（`ParserError: 意外的标记"}"`）。浮窗脚本改为**纯 ASCII**，
+  文案经状态文件传入（本来就该这样）。
+- 浮窗子进程会让 Node 事件循环一直被吊住：宿主里表现为插件卸载后不退出，
+  测试里表现为 `node --test` 永不结束。加 `child.unref()`。
+
+### 验证
+
+- 单测 50/50（含新增 `tests/banner-win.test.mjs`）；`verify:contract` 22/22。
+- 真机起真浮窗截图确认：置顶居中、圆角框、打字动画、盖在 Edge 窗口之上可见。
+
 ## 0.5.0（2026-10-01）
 
 **视觉模型：给不支持图片输入的会话模型补一双眼睛。**

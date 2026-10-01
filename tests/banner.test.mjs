@@ -104,7 +104,7 @@ test('reduced-motion：文字直接完整显示，不做打字动画', async (t)
   t.after(dispose);
   await flush();
   const label = banner().children[0].children[1];
-  assert.match(label.textContent, /^X-Agent 正在操控中…/, '一次到位');
+  assert.match(label.textContent, /^X-Agent 正在操控桌面…/, '一次到位');
   assert.match(label.textContent, /x_desktop_press/, '带出正在执行的动作名');
 });
 
@@ -120,10 +120,10 @@ test('打字效果：逐字出现，且带闪烁光标', async (t) => {
   assert.ok(label.textContent.length > 0, '已经开始打字');
   assert.ok(label.textContent.length < 20, `此时还没打完（实际 ${JSON.stringify(label.textContent)}）`);
   // 打字中：屏幕上的是全文的一个前缀（不是另一段文案，也不是从中间开始）
-  assert.ok('X-Agent 正在操控中…（x_desktop_value）'.startsWith(label.textContent),
+  assert.ok('X-Agent 正在操控桌面…（x_desktop_value）'.startsWith(label.textContent),
     `必须是全文前缀（实际 ${JSON.stringify(label.textContent)}）`);
   // 打字结束后文案完整（轮询等待，不拍脑袋定毫秒数——文案长度一变就会假红）
-  const full = 'X-Agent 正在操控中…（x_desktop_value）';
+  const full = 'X-Agent 正在操控桌面…（x_desktop_value）';
   await waitFor(() => label.textContent === full, 4000);
   assert.equal(label.textContent, full);
 });
