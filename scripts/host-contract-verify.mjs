@@ -12,7 +12,7 @@
  *   DHCX_ASAR=<app.asar 路径> 可指定非默认安装位置。
  * 找不到 app.asar（非本机/未装桌面端）时退回仓库内镜像规则，并在输出里注明「未经真宿主校验」。
  */
-import { mkdtempSync, mkdirSync, writeFileSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, openSync, readSync, closeSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,6 +21,9 @@ import { checkHostSchema } from '../lib/core/host-schema.js';
 
 const ASAR = process.env.DHCX_ASAR ?? 'D:/Programs/DeepSeek Harness/resources/app.asar';
 const pkgRoot = mkdtempSync(join(tmpdir(), 'dsh-control-x-contract-'));
+// 这里会把宿主真包解出来，是整个脚本最大的一块临时产物；不收掉的话每跑一次
+// 就在 %TEMP% 留一份（实测已堆到 3 份）。退出时清，异常退出也清。
+process.on('exit', () => { try { rmSync(pkgRoot, { recursive: true, force: true }); } catch { /* 忽略 */ } });
 const modulesRoot = join(pkgRoot, 'node_modules');
 
 function assert(cond, message) {
@@ -119,6 +122,7 @@ function hostGate(definition) {
 const accepted = [];
 const rejected = [];
 const tools = new Map();
+const disposers = [];
 const ctx = {
   tools: {
     register: (t) => {
@@ -133,10 +137,14 @@ const ctx = {
   },
   get: () => undefined,
   logger: { info() {}, warn() {} },
+  // 收集销毁钩子：apply() 里的 ctx.effect(() => () => banner.stop()) 必须真的被
+  // 收走，否则每次验收都在 %TEMP% 留一个孤儿目录。
+  effect: (fn) => { disposers.push(fn()); },
   inject: (services, cb) => {
     if (services.includes('skills')) cb({ skills: { register() {} }, logger: { info() {}, warn() {} } });
   },
 };
+process.on('exit', () => disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }));
 
 apply(ctx, { headless: true, ttlMs: 30000, allowedApps: [], browserEnabled: true, desktopEnabled: true });
 assert(tools.get('x_activate') !== undefined, 'x_activate 通过宿主注册门');

@@ -15,33 +15,45 @@ import { checkHostSchema, toHostSchema } from '../lib/core/host-schema.js';
 /** 注册常驻 + 激活后的完整工具面（走真实 apply()，与宿主同一段注册代码）。 */
 async function allTools() {
   const registered = new Map();
+  const disposers = [];
   const ctx = {
     tools: { register: (t) => registered.set(t.name, t) },
     get: () => undefined,
     logger: { info() {}, warn() {} },
+    // 没有 effect 的话 apply() 注册的销毁钩子永远不会被调用，浮窗的临时目录
+    // 就留在 %TEMP% 里没人删（实测本文件每次跑漏 4 个）。
+    effect: (fn) => { disposers.push(fn()); },
     inject: (services, cb) => {
       if (services.includes('skills')) cb({ skills: { register() {} }, logger: { info() {}, warn() {} } });
     },
   };
   apply(ctx, { headless: true, ttlMs: 30000, allowedApps: [], browserEnabled: true, desktopEnabled: true });
   await registered.get('x_activate').execute({}, {});
-  return registered;
+  return {
+    registered,
+    dispose() { disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }); },
+  };
 }
 
-test('常驻门控：只有 x_status + x_activate，且激活后共 21 个工具', async () => {
+test('常驻门控：只有 x_status + x_activate，且激活后共 21 个工具', async (t) => {
   const before = new Map();
+  const disposers = [];
   apply({
     tools: { register: (t) => before.set(t.name, t) },
     logger: { info() {}, warn() {} },
+    effect: (fn) => { disposers.push(fn()); },
   }, { headless: true });
+  t.after(() => { disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }); });
   assert.deepEqual([...before.keys()], ['x_status', 'x_activate']);
 
-  const registered = await allTools();
+  const { registered, dispose } = await allTools();
+  t.after(dispose);
   assert.equal(registered.size, 22, '激活后工具总数（常驻 2 + 能力 20，含 x_vision_describe）');
 });
 
-test('全部 22 个工具的 schema 满足宿主 raw JSON Schema 子集', async () => {
-  const registered = await allTools();
+test('全部 22 个工具的 schema 满足宿主 raw JSON Schema 子集', async (t) => {
+  const { registered, dispose } = await allTools();
+  t.after(dispose);
   const failures = [];
   for (const tool of registered.values()) {
     for (const [field, schema] of [['parameters', tool.parameters], ['output.schema', tool.output.schema]]) {
@@ -59,12 +71,13 @@ test('全部 22 个工具的 schema 满足宿主 raw JSON Schema 子集', async 
   }
 });
 
-test('无副作用工具的返回值必须满足自己的 output.schema（宿主会校验，缺一个键就判失败）', async () => {
+test('无副作用工具的返回值必须满足自己的 output.schema（宿主会校验，缺一个键就判失败）', async (t) => {
   // 背景：2026-10-01 真机 E2E 实测，宿主拿 output.schema 校验工具返回值，
   // x_browser_tabs 返回 {tabs} 而 schema 要求 {ok,tabs}，调用被直接判
   // "missing required property value.ok"。此前所有测试都直接调 execute()、
   // 绕过宿主校验，这类不匹配全被放过——注册失败把它一起遮住了。
-  const registered = await allTools();
+  const { registered, dispose } = await allTools();
+  t.after(dispose);
   for (const name of ['x_browser_tabs']) {
     const tool = registered.get(name);
     const value = await tool.execute({}, { signal: AbortSignal.timeout(15000) });

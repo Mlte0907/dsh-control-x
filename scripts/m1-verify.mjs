@@ -21,10 +21,15 @@ const stubAttachments = {
 
 // 走真实注册路径（apply），确保验证的就是宿主将注册的工具集
 const registered = new Map();
+// effect 必须真的收集销毁钩子：apply() 会 ctx.effect(() => () => banner.stop())，
+// 没有它就等于浮窗的临时目录永远没人删（每次跑漏一个 %TEMP%\dsh-control-x-*）。
+const disposers = [];
+process.on('exit', () => disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }));
 const mockCtx = {
   tools: { register: (t) => registered.set(t.name, t) },
   get: (name) => (name === 'attachments' ? stubAttachments : undefined),
   logger: { info() {}, warn() {} },
+  effect: (fn) => { disposers.push(fn()); },
 };
 apply(mockCtx, { headless: true });
 const tools = registered;

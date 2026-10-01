@@ -33,10 +33,14 @@ function assertReturnShape(tool, value, label) {
 // ── 1. 门控 ──
 let skillRegistered = null;
 const registered = new Map();
+const disposers = [];
+process.on('exit', () => disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }));
 const mockCtx = {
   tools: { register: (t) => registered.set(t.name, t) },
   get: () => undefined, // 无 approval 服务 → 物理路径走 confirm_disturbance 例外
   logger: { info() {}, warn() {} },
+  // 不收集销毁钩子的话 apply() 里的 banner.stop() 永不执行，每次跑漏一个临时目录。
+  effect: (fn) => { disposers.push(fn()); },
   inject: (services, cb) => {
     if (services.includes('skills')) {
       cb({ skills: { register: (s) => { skillRegistered = s; } }, logger: { info() {}, warn() {} } });

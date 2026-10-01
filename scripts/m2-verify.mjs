@@ -15,10 +15,15 @@ import { apply } from '../lib/index.js';
 const execFileAsync = promisify(execFile);
 
 const registered = new Map();
+// effect 必须真的收集销毁钩子，否则 apply() 里的 banner.stop() 永不执行，
+// %TEMP% 每次跑漏一个 dsh-control-x-* 目录。
+const disposers = [];
+process.on('exit', () => disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }));
 const mockCtx = {
   tools: { register: (t) => registered.set(t.name, t) },
   get: () => undefined,
   logger: { info() {}, warn() {} },
+  effect: (fn) => { disposers.push(fn()); },
 };
 apply(mockCtx, { headless: true, ttlMs: 30000 });
 await registered.get('x_activate').execute({}, { signal: AbortSignal.timeout(10000) });

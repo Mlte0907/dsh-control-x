@@ -1,5 +1,66 @@
 # 更新日志
 
+## 0.5.3（2026-10-01）
+
+**修掉一个真 bug：横幅浮窗从启动起就钉在桌面左上角不消失。**
+
+### 问题
+
+用户报告桌面左上角常驻一个「带蓝色小圆点的空框」。**不是残留进程**——全机只有宿主拉起的那一个
+浮窗进程，指向已安装的 profile 路径。取证：窗口 `dsh-control-x-banner` `Visible=True`，
+位置 `(0,0)`、尺寸 `420x40`；而同一时刻 `banner.json` 是 `active:false`、
+`/api/x-control/activity` 报 `running:false`——**状态说该隐藏，窗口却显示着**。
+
+### 根因（`lib/banner-overlay.ps1`，两处叠加）
+
+1. **`[System.Windows.Forms.Application]::Run($form)` 会自己 `Show()`**，
+   把脚本里紧挨其前的 `$form.Show(); $form.Hide()` 抵消掉了。
+2. 显隐判断写成 `if ($wantVisible -ne $script:Visible)`，**只在跳变时动作**。而
+   `$script:Visible` 初值 `$false`，与「要隐藏」一致，于是 `Hide()` 一次都不会执行；
+   缓存标志与表单真实可见性脱钩后永不重新同步。
+
+三个症状同一个原因：位置停在 `(0,0)` 是因为 `Set-CxGeometry` 只在「要显示」时才跑，
+永远不跑，尺寸停在构造值 `Size(420,40)`（**实测 420x40 正是构造值**）；有蓝点没文字，
+是因为 `Paint` 无条件画圆点而 `Base`/`Dots` 是空串。
+
+### 修法
+
+显隐改读**表单真实状态**而非缓存标志（`if (-not $form.Visible) { Show() } else { if ($form.Visible) { Hide() } }`），
+删掉那对误导性的 `Show(); Hide()` 前奏，首次 tick 间隔设为 16ms，让自愈在 `Run` 之后立刻发生。
+
+### 顺带修掉临时目录泄漏
+
+`%TEMP%` 下堆了 **62 个 `dsh-control-x-*` 孤儿目录、16.3 MB**，已全部清理。两个成因：
+
+- `createDesktopBanner()` 一创建就 `mkdtempSync`，只有 `stop()` 才删 → 改为**在 `start()` 里惰性创建**，
+  `stop()` 后置空以便复用；返回对象里的 `statePath` 相应改为 getter。
+- `tests/smoke.test.mjs`（3 次 `apply()`）与 `tests/host-contract.test.mjs`（4 次）的 mock ctx
+  **没有 `effect`**，所以 `ctx.effect(() => () => banner.stop())` 形同虚设，销毁钩子从不注册 → 补上
+  `effect` 收集器并用 `t.after` 收尾。
+
+### 验证
+
+- **复现**：拿装好的脚本配一个 `active:false` 的 state 起进程 → `VISIBLE at (0,0) size 420x40`，
+  与线上实例逐字节一致（不是推断）。
+- **复测三态**：`active:false → hidden`；`active:true → VISIBLE (1160,18) 240x40`
+  （1160 = (2560−240)/2，**居中正确**）；再回 `false → hidden`。
+- 跑完整套单测后 `%TEMP%` **零新增目录、零新增进程**（修复前 smoke 漏 3、host-contract 漏 4）。
+- 单测 **51/51**，宿主契约门 22/22。
+- 新增两条结构化回归测试：「显隐必须读 `$form.Visible` 真实状态」与「没 `start()` 就不建目录」。
+  前者做了**变异测试**——把修复还原后该用例 pass 0 / fail 1，确认守得住。
+
+### 部署注意
+
+已安装的 `banner-overlay.ps1` 与 pnpm 内容寻址存储是**同一条 inode**
+（`fsutil hardlink list` 查到 3 个链接）。直接覆盖写会改坏 store 里按 sha512 命名的文件。
+正确做法：先 `Remove-Item` 摘掉这条链接（store blob 不受影响），再写新文件，
+改完断言 store blob 的 SHA512 未变、installed 链接数为 1。
+
+### 需要用户做的
+
+**重启 DSH 后生效**。不要直接杀那个浮窗进程：`banner-win.js` 只在 `start()` 里拉起、
+`stop()` 才 kill，宿主**不会重拉**，杀掉后横幅会彻底消失直到重启。
+
 ## 0.5.2（2026-10-01）
 
 **横幅按用户口径重做：只留一句话，点才有动画。**
@@ -26,6 +87,9 @@
 
 浮窗进程在「直接调 `apply()` 却没走 dispose」的路径上会残留（测试脚本、宿主热重载），
 会在桌面左上角留一个空胶囊框。本次已手工清理，代码未加看门狗，待用户决定是否下次一起修。
+
+> 已在 **0.5.3** 处理：当时判断有误——那个框不是进程残留，而是浮窗显隐 bug 本身
+> （`Application.Run` 抵消 Hide + 只在跳变时动作）。进程泄漏与临时目录泄漏一并修掉。
 
 ## 0.5.1（2026-10-01）
 

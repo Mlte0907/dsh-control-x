@@ -8,6 +8,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { bannerState, stateSignature, createDesktopBanner, BANNER_TEXT, BANNER_DOTS } from '../lib/banner-win.js';
 import { createActivityTracker } from '../lib/desktop/activity.js';
 
@@ -78,6 +80,20 @@ test('停止写入：被停用后浮窗不会再收到旧状态', () => {
   assert.ok(Array.isArray(writes));
 });
 
+test('没 start() 就不建临时目录（否则没走 stop() 的调用方会留孤儿目录，实测堆到 62 个 16.3MB）', () => {
+  const before = readdirSync(tmpdir()).filter((n) => n.startsWith('dsh-control-x-')).length;
+  const banner = createDesktopBanner({
+    activity: createActivityTracker({ graceMs: 0 }),
+    spawnImpl: () => ({ unref() {}, on() {}, kill() {} }),
+    setIntervalImpl: () => ({ unref() {} }),
+    clearIntervalImpl: () => {},
+  });
+  const after = readdirSync(tmpdir()).filter((n) => n.startsWith('dsh-control-x-')).length;
+  assert.equal(after, before, 'createDesktopBanner() 本身不许建目录');
+  assert.equal(banner.statePath, null, '未 start() 时 statePath 应为 null，且必须是 getter 才对');
+  banner.stop();
+});
+
 test('浮窗脚本不含 CJK 字面量（Windows PowerShell 无 BOM 按 ANSI 解码会解析失败）', () => {
   const src = readFileSync(new URL('../lib/banner-overlay.ps1', import.meta.url), 'utf8');
   const offenders = [...src].filter((ch) => /[^\x00-\x7F]/.test(ch));
@@ -89,4 +105,19 @@ test('浮窗脚本必须启动计时器（Timer 创建后是静止的，不 Star
   assert.match(src, /\$timer\.Start\(\)/, '缺 Start() 的话横幅永远停在空框——实测踩过');
   assert.match(src, /WS_EX_TRANSPARENT/, '必须点击穿透，否则置顶浮窗会挡住用户自己的桌面');
   assert.match(src, /HWND_TOPMOST/, '必须置顶，否则 Agent 操控别的应用时看不见');
+});
+
+test('浮窗显隐必须读表单真实状态，不能只认缓存标志（实测踩过：空框常驻左上角）', () => {
+  const src = readFileSync(new URL('../lib/banner-overlay.ps1', import.meta.url), 'utf8');
+  // Application.Run($form) 会自行 Show()，把它之前的 $form.Hide() 抵消掉。缓存标志
+  // $script:Visible 初值 $false，于是「$wantVisible -ne $script:Visible」永远为假，
+  // Hide() 从不执行：空框从启动起就钉在 (0,0)，状态说空闲它也照常显示。实测复现
+  // （active:false → VISIBLE at (0,0) 420x40），修法是改读 $form.Visible。
+  assert.doesNotMatch(
+    src,
+    /\$wantVisible\s+-ne\s+\$script:Visible/,
+    '又退回「只在跳变时动作」的写法了：Application.Run 会自己 Show()，缓存标志会和真实可见性脱钩',
+  );
+  assert.match(src, /-not \$form\.Visible/, '显示前必须读 $form.Visible 真实状态');
+  assert.match(src, /if \(\$form\.Visible\) \{ \$form\.Hide\(\) \}/, '隐藏前必须读 $form.Visible 真实状态');
 });

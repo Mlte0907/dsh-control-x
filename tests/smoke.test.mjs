@@ -10,17 +10,23 @@ import { validateAgainstSchema } from '../lib/core/tool.js';
 
 function makeMockCtx() {
   const registered = new Map();
+  const disposers = [];
   return {
     ctx: {
       tools: { register: (t) => registered.set(t.name, t) },
       logger: { info() {}, warn() {} },
+      // apply() 会 ctx.effect(() => () => banner.stop())。没有 effect 的话销毁钩子
+      // 根本不会被注册，浮窗的临时目录就成了 %TEMP% 里的孤儿（实测每次跑留 3 个）。
+      effect: (fn) => { disposers.push(fn()); },
     },
     registered,
+    dispose() { disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }); },
   };
 }
 
-test('apply 注册 x_status 且 execute 返回契约形状', async () => {
-  const { ctx, registered } = makeMockCtx();
+test('apply 注册 x_status 且 execute 返回契约形状', async (t) => {
+  const { ctx, registered, dispose } = makeMockCtx();
+  t.after(dispose);
   apply(ctx, { headless: true, ttlMs: 30000, allowedApps: [] });
   assert.ok(registered.has('x_status'), 'x_status 未注册');
   const tool = registered.get('x_status');
@@ -34,8 +40,9 @@ test('apply 注册 x_status 且 execute 返回契约形状', async () => {
   assert.equal(blocks[0].type, 'text');
 });
 
-test('x_status 报的版本等于 package.json 的真实版本（防再写死）', async () => {
-  const { ctx, registered } = makeMockCtx();
+test('x_status 报的版本等于 package.json 的真实版本（防再写死）', async (t) => {
+  const { ctx, registered, dispose } = makeMockCtx();
+  t.after(dispose);
   apply(ctx, { headless: true });
   const value = await registered.get('x_status').execute({}, {});
   const declared = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -78,8 +85,9 @@ test('execute 抛错归一为带 retry 语义的 ControlXError', async () => {
   );
 });
 
-test('总开关门控：browserEnabled/desktopEnabled 关闭后工具拒绝执行', async () => {
-  const { ctx, registered } = makeMockCtx();
+test('总开关门控：browserEnabled/desktopEnabled 关闭后工具拒绝执行', async (t) => {
+  const { ctx, registered, dispose } = makeMockCtx();
+  t.after(dispose);
   const config = {
     headless: true, ttlMs: 30000, allowedApps: [],
     browserEnabled: true, desktopEnabled: true,

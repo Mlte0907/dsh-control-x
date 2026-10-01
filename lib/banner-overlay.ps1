@@ -206,10 +206,17 @@ $timer.Add_Tick({
     if ($wantVisible -and $script:Shown -lt $script:Dots.Length) { $script:Shown = $script:Shown + 1 }
     if ($wantVisible) { try { Set-CxGeometry } catch { } }
 
-    if ($wantVisible -ne $script:Visible) {
-      $script:Visible = $wantVisible
-      if ($wantVisible) { $form.Show() } else { $form.Hide() }
+    # Drive visibility from the form's ACTUAL state, not from a cached flag.
+    # Application.Run($form) shows the form itself, which undid the explicit
+    # Hide() that used to precede it; a cached flag started at $false therefore
+    # agreed with itself and never issued the Hide(), leaving an empty box
+    # pinned at (0,0) on screen from startup until the next real transition.
+    if ($wantVisible) {
+      if (-not $form.Visible) { $form.Show() }
+    } else {
+      if ($form.Visible) { $form.Hide() }
     }
+    $script:Visible = $wantVisible
     if ($script:Visible) { $form.Invalidate() }
     # Idle most of the time, so poll slowly while hidden and only spin up while typing.
     $timer.Interval = if ($script:Visible) { 80 } else { 500 }
@@ -219,9 +226,9 @@ $timer.Add_Tick({
   }
 })
 
-$form.Show()
-$form.Hide()
 # A WinForms Timer is created INACTIVE; without an explicit Start() its Tick never
-# runs and the overlay just sits there as an empty box forever.
+# runs. The first tick must land almost immediately: Application.Run($form) shows
+# the form by itself, so the very first job of the tick is to hide it again.
+$timer.Interval = 16
 $timer.Start()
 [System.Windows.Forms.Application]::Run($form)
