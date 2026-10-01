@@ -3,6 +3,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 test('client bundle 注册三个官方原生 slot', async () => {
   const handlers = new Map();
@@ -285,4 +286,33 @@ test('watch 路由：GET /tabs 与 GET /config', async () => {
   const ld = JSON.parse((await request('POST', '/login-done', { url: 'https://x/' })).body);
   assert.equal(ld.ok, true);
   assert.equal(ld.saved, true);
+});
+
+/**
+ * 设置页「版本与更新」卡片的结构契约。
+ *
+ * 这是**源码结构**测试而不是渲染测试：client.js 的组件用 React hooks，
+ * 而本文件的 React 桩只有 createElement，渲染会直接抛。所以这里钉的是
+ * 几条不能被悄悄改掉的约定——真正的行为分支由 tests/updater.test.mjs 覆盖。
+ */
+test('设置页自带版本与更新：打开即检查，有新版才给更新按钮', async () => {
+  const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+
+  assert.match(src, /"版本与更新"/, '设置页应有「版本与更新」分组');
+  assert.match(src, /api\("\/update",\s*\{\s*action:\s*"check"/, '打开设置页应自动检查一次');
+  assert.match(src, /api\("\/update",\s*\{\s*action:\s*"apply"\s*\}\)/, '应有触发更新的调用');
+
+  // 更新按钮只能出现在"确实有更高版本"这一支里：
+  // 拿不到结论时给的是一个说人话的失败文案 + 重试，而不是一个点不动的"已是最新"。
+  const branch = src.slice(src.indexOf('s.updateAvailable === true'));
+  assert.match(branch, /"更新到 "\s*\+\s*s\.latest/, '有新版时按钮写明目标版本');
+  assert.equal((branch.match(/"更新到 "/g) ?? []).length, 1, '"更新到" 按钮只能出现在有新版这一支');
+  assert.match(src, /s\.failedPhase === "apply"/, '更新失败与检查失败要分开说');
+  assert.match(src, /s\.failedPhase === "check"/);
+
+  // 轮询只在作业进行中开，收工即停，不在设置页上留常驻定时器。
+  assert.match(src, /if \(s\.busy !== true\) return undefined;/, '非忙时不得轮询');
+
+  // 版本号要显示出来（用户明确要求"加一个版本号"）。
+  assert.match(src, /title:\s*"当前版本"/);
 });

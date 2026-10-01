@@ -1,5 +1,119 @@
 # 更新日志
 
+## 0.5.7（2026-10-02）
+
+**插件自带版本号与自更新按钮，不再依赖插件市场。**
+
+### 一、为什么要自己做
+
+2026-10-02 实测：市场在 **0.5.5 上卡住不动**。用户"更新并重启"之后——
+
+- `profiles/desktop/package.json` 的 specifier 仍停在 `#a3d64ff`（= 0.5.5），
+  文件 LastWriteTime 是重启那一刻，说明确实被重写过，但 pin 纹丝不动；
+- `node_modules/dsh-control-x/package.json` 的 `version` 仍是 `0.5.5`；
+- 市场日志里**连一条 0.5.6 的记录都没有**（最后一条是 10-01 21:34 的 0.5.2 更新失败）。
+
+更新能力不能寄存在一个会静默不动的第三方身上，所以本版本自带。
+
+### 二、设置页长什么样
+
+新增分组「版本与更新」，两张行：
+
+- **当前版本** —— 显示盘上真实版本（读盘上的 `package.json`，不是内存里那份）；
+- **检查更新** —— 打开设置页**自动检查一次**，只有真拿到更高的版本号才渲染
+  `更新到 0.x.y` 按钮；已是最新 / 检查失败 / 更新失败分别有各自的文案。
+
+### 三、更新怎么执行
+
+`lib/core/updater.js`，四个环节：
+
+1. **查版本**：`GET https://raw.githubusercontent.com/<repo>/main/package.json`。
+   不用 GitHub API（无限流、不用 token）。
+2. **下载**：`GET https://codeload.github.com/<repo>/tar.gz/main`，
+   同时算出 `sha512-<base64>` 作为 integrity。
+3. **换装**：`tar -xzf` 解包后**整目录 `rename` 走、再 `cpSync` 拷回来**。
+4. **同步来源**：把 `profile/package.json` 的 pin 与 `pnpm-lock.yaml` 一起改到新 commit。
+
+### 四、两个必须说清楚的实现约束
+
+**① 绝不能原地写已安装的文件。** 实测 `node_modules/dsh-control-x` 里的文件是
+pnpm 内容寻址存储的**硬链接**：
+
+```
+fsutil hardlink list ...\dsh-control-x\lib\banner-overlay.ps1
+  \.pnpm-store\v11\tmp\_tmp_21360_...      <- 上次装到一半留下的残留
+  \Users\...\node_modules\dsh-control-x\lib\banner-overlay.ps1
+  \.pnpm-store\v11\files\f5\a72d917c...   <- 按 sha512 命名的共享 blob
+```
+
+原地覆写等于改坏 store 里那个被别的安装面共用的 blob。所以流程是"整目录搬走 + 全新拷贝"：
+`rename` 只搬链接、不碰 store，`cpSync` 落的是全新 inode（链接数 1）。
+
+**② 锁文件必须一起改对。** pnpm 对 `gitHosted` tarball 的 integrity **就是 tarball 字节的
+sha512-base64**——实测下载 `a3d64ff` 的 tarball 算出来与锁文件里的值逐字符相同：
+
+```
+computed: sha512-sQp8ETh02mrvlsUmbom2WWSMvOThWdninqLKeHh3sKv3xyZB9X1iDreQK23c6DpF2z3xJKzGOj+GdMx1mFR/og==
+lockfile: sha512-sQp8ETh02mrvlsUmbom2WWSMvOThWdninqLKeHh3sKv3xyZB9X1iDreQK23c6DpF2z3xJKzGOj+GdMx1mFR/og==
+```
+
+插件进程里**没有可执行的 pnpm**（只有 corepack 的 shim，首次使用要联网下载），
+所以锁文件是手写改的。不同步的代价很具体：**将来任何一次 `pnpm install` 都会把插件
+悄悄打回旧版本，且没有任何提示。**
+
+锁文件改写按块处理（条目头 = 两空格 + 非空格，块内 = 四空格缩进），只动本插件那个块的
+`version` 与 `integrity`；旧 sha 是 40 位十六进制的独占标记，全文替换。
+改到一半失败会整体还原——半改的锁文件比不改更糟。
+
+### 五、机器慢的那次超时：不是慢，是卡
+
+第一次端到端跑，`checkUpdate` 报了一次 `The operation was aborted due to timeout`，
+而同一时刻下载 tarball 却只用了 2 秒。于是量了两条路线（各 6 次）：
+
+| 目标 | 成功率 | 中位耗时 |
+|---|---|---|
+| 直连 `raw.githubusercontent.com` | 6/6 | **78ms** |
+| `gh-proxy.org` 代理 `raw` | 6/6 | 247ms（**慢 3.2 倍**） |
+| 直连 `codeload`（155KB tarball） | 4/4 | **523ms** |
+| `gh-proxy.org` 代理 `codeload` | 4/4 | 731ms（**慢 1.4 倍**） |
+
+**镜像不快，所以没把它设成默认。** 真正的毛病是偶发**连接卡住**——另一轮里直连出现过
+一次 19 秒后 `ECONNRESET`。那不是带宽问题，是连接问题，重试一下就好。
+
+所以做了两件事：
+
+- **自动重试**：直连各重试 2 次（下载 3 次），退避 400ms/800ms，只对"没有答复"的失败
+  （超时、ECONNRESET、DNS）重试；HTTP 4xx/5xx 是明确答复，重试也没用。
+- **可选镜像兜底**：设置页新增「更新镜像」，填 URL 前缀（如 `https://gh-proxy.org/`），
+  **只在直连全部失败后才用**，默认留空。改完不用重启插件（`cfg` 是 getter，控制器
+  每次作业现读一次）。
+
+### 六、测试里逮到的三个真 bug
+
+"连点两次更新只跑一次"这条用例第一次跑就红了：`rename EPERM`。查下来是
+`createUpdateController` 的 `startApply()` **漏了 `inflight = job` 这一行**——
+单飞闸形同虚设，连点两次会并行跑两个 `applyUpdate`，两个都去 `rename` 同一个包目录，
+第二个在第一个已经搬走之后炸。而这正是用户在 UI 上双击按钮就会踩到的路径。
+
+另一个：锁文件改写最初按"条目块"处理，漏掉了 `importers` 段——那里的
+`specifier` / `version` 缩进在 6~8 空格的层里，不属于任何条目块，
+结果旧 sha 残留在锁文件里。测试断言"旧 sha 不该残留"把它逼了出来。
+
+第三个是我自己造的：写代码时把 `\0`（NUL）当字面字符写进了源文件，**文件被当成 binary**、
+`edit` 工具直接拒收。逐字节扫 9/13/32 之间的位置才找到——全量扫过 `lib/`，0 个残留。
+
+### 七、验证
+
+- 单测 **73/73**（`tests/updater.test.mjs` 14 条 + `ui.test.mjs` 结构契约 1 条）
+- 宿主契约门 **22/22**（`scripts/host-contract-verify.mjs`）
+- 换装链路在**真网络 + 真 tar + 真实 282 行 profile 锁文件**下端到端跑通：
+  0.5.5 → 0.5.6 用时 1992ms，锁文件**只改 6 行**（5 处 sha + integrity + version），
+  其余包一个字节没动
+- `m1/m2/m3` 在当前沙箱里跑不了（它们要真拉起 Edge 进程，`spawn EPERM`），
+  这与本改动无关，报出来不掩饰
+
+---
+
 ## 0.5.6（2026-10-02）
 
 **去掉打字效果；修掉横幅内容层间歇性空白（用户报的"一闪一闪"）。**
