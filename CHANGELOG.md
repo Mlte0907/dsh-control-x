@@ -1,5 +1,61 @@
 # 更新日志
 
+## 0.5.8（2026-10-02）
+
+**紧急修复：0.5.7 自写的 pnpm integrity 让整个 profile 的 pnpm 操作全线失败。**
+
+### 事故
+
+0.5.7 装机约 26 分钟后，用户在插件管理器里卸载插件市场，失败。原因与插件市场无关，
+是插件管理器跑 pnpm 时直接报错：
+
+```
+[ERR_PNPM_TARBALL_INTEGRITY] .../dsh-control-x/tar.gz/8468716...
+  Wanted "sha512-6aKk12KWx5zF72..."   <- 0.5.7 写进锁文件的
+  Got    "sha512-ebhAMc6K2NeDaoL..."   <- pnpm 自己下载到的
+```
+
+锁文件里那个值是错的。**根因不是"哈希算错"，而是"自己算出来的哈希根本不该被信任"。**
+0.5.7 当时的判断依据是"pnpm 对 gitHosted tarball 的 integrity 就是 tarball 字节的
+sha512-base64"——那一条在旧 commit（a3d64ff）上实测逐字符成立，于是被直接推广到了新 commit。
+
+而对同一个 commit `8468716` 连下三次，哈希都是 `ebhAMc6K...`，完全稳定——说明
+**装机当时拿到的那份字节，和后来 pnpm 拿到的那份不是同一份**。新推的 commit，
+codeload 的归档很可能重新生成过（git 对象打包状态不同 → gzip 字节不同），
+具体成因我没有查清，也不该靠猜。
+
+### 影响面
+
+pnpm 把这当成"疑似供应链投毒"，于是**该 profile 下任何一次 pnpm 操作**——更新别的插件、
+装新的、卸载市场——都会卡在同一条检查上。也就是说：一个插件的更新动作，
+能让整个 profile 失去安装能力。
+
+### 改法
+
+`syncProfileSources` **不再写 integrity**，并把本插件那条上可能存在的 integrity **删掉**，
+让 pnpm 自己写。形状对齐本 profile 里本来就正常工作的 `dsh-teams-x`：
+
+```yaml
+resolution: {gitHosted: true, tarball: https://codeload.github.com/...}   # 无 integrity
+```
+
+保留的那部分仍然有用：sha 照旧改对，所以 `pnpm install` 不会把插件打回旧版本——
+只是 integrity 交给它的主人生成，而不是我抢着写。
+
+**教训**：往别人维护的锁文件里写"校验和"这类东西，代价与收益完全不成比例。
+写对了没人在意，写错一个字符就让整条工具链停摆。要改锁文件，就只改那些
+**语义明确、格式唯一**的字段（版本号、commit sha）；校验和让它的主人自己算。
+
+### 验证
+
+- 单测 **73/73**（新增断言：本插件的 resolution 行里不得出现 `integrity`，
+  同时隔壁包的 integrity 必须原样保留）
+- 宿主契约门 **22/22**
+- 现场止血：已把用户 profile 锁文件里那条错值删掉（改前留了
+  `pnpm-lock.yaml.cx-bak-*` 备份），sha 仍是 8468716，其余 8 个依赖的 integrity 一律未动
+
+---
+
 ## 0.5.7（2026-10-02）
 
 **插件自带版本号与自更新按钮，不再依赖插件市场。**

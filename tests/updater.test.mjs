@@ -315,17 +315,19 @@ test('换装：整目录搬走再拷新文件，profile 来源与锁文件一起
     assert.equal(pkg.dependencies['dsh-cost-meter'], '1.8.5', '不该动到别的依赖');
 
     // 锁文件：五处 sha 全换（含 importers 段的 specifier/version，它们不在条目块里）、
-    // integrity 换新、version 换新
+    // version 换新；**integrity 一律不写**
     const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
     assert.equal(lock.includes(OLD_SHA), false, '旧 sha 不该残留');
     assert.equal((lock.match(new RegExp(NEW_SHA, 'g')) ?? []).length, 5, 'importers×2 + packages×2 + snapshots×1 都要换');
     assert.equal(lock.includes('version: 0.5.7'), true);
-    assert.equal(lock.includes(OLD_INTEGRITY), false, 'integrity 必须换成新 tarball 的');
-    assert.equal(lock.includes(result.integrity), true, '新 integrity 要真的写进去');
-    assert.equal(result.integrity.startsWith('sha512-'), true);
-    // 隔壁包一个字节都不能动
+    assert.equal(lock.includes(OLD_INTEGRITY), false, '旧 integrity 必须被删掉');
+    // 形状要和本 profile 里能正常工作的 dsh-teams-x 一致：gitHosted 无 integrity。
+    // 0.5.7 就是因为自写 integrity 让整个 profile 的 pnpm 全线失败（ERR_PNPM_TARBALL_INTEGRITY）。
+    const ourLine = lock.split('\n').find((l) => l.includes('resolution: {gitHosted') && l.includes('control-x'));
+    assert.equal(ourLine.includes('integrity'), false, `本插件的 resolution 行绝不该有 integrity：${ourLine}`);
+    // 隔壁包一个字节都不能动（它们的 integrity 是 pnpm 自己写的，必须留着）
     assert.equal(lock.includes('version: 1.8.5'), true, '隔壁包的 version 必须原样保留');
-    assert.equal(lock.includes('sha512-Lsv0Ks4aeFsBn1qn2zdp+HdI8KGwa4b+HhzI0SKSEWH78vJ3ihWl7D2l2Cc+Pv+iMWECAL28DN3skbnqIZBow=='), true);
+    assert.equal(lock.includes('sha512-Lsv0Ks4aeFsBn1qn2zdp+HdI8KGwa4b+HhzI0SKSEWH78vJ3ihWl7D2l2Cc+Pv+iMWECAL28DN3skbnqIZBow=='), true, '隔壁包的 integrity 必须留着');
     assert.equal(result.lockSynced, true);
     assert.deepEqual(result.warnings, [], `不该有警告：${JSON.stringify(result.warnings)}`);
 
@@ -360,7 +362,7 @@ test('syncProfileSources：锁文件里找不到本插件条目时如实报警�
     writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { 'dsh-control-x': 'github:x/y#abc' } }));
     writeFileSync(join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies: {}\n");
     const out = syncProfileSources({
-      profileDir: root, repo: REPO, sha: NEW_SHA, integrity: 'sha512-x', newVersion: '0.5.7', backupSuffix: '.bak',
+      profileDir: root, repo: REPO, sha: NEW_SHA, newVersion: '0.5.7', backupSuffix: '.bak',
     });
     assert.equal(out.warnings.length, 1);
     assert.match(out.warnings[0], /未改写 pnpm-lock\.yaml/);
