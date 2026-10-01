@@ -104,7 +104,7 @@ test('reduced-motion：文字直接完整显示，不做打字动画', async (t)
   t.after(dispose);
   await flush();
   const label = banner().children[0].children[1];
-  assert.equal(label.textContent, 'X-Agent 正在操控面...', '一次到位');
+  assert.equal(label.textContent, 'X-Agent正在控制电脑，操控键鼠会打断操作...', '一次到位');
   assert.ok(!label.textContent.includes('x_desktop_press'), '不出现动作名');
 });
 
@@ -116,7 +116,7 @@ test('打字效果：正文立刻出现，只有末尾三个点逐个打出', as
   const label = box.children[1];
   const caret = box.children[2];
   assert.match(caret.style.cssText, /dsh-control-x-blink/, '光标带闪烁动画');
-  const BASE = 'X-Agent 正在操控面';
+  const BASE = 'X-Agent正在控制电脑，操控键鼠会打断操作';
   assert.ok(label.textContent.startsWith(BASE), '正文立刻完整出现，不逐字打');
   assert.ok(label.textContent.length < BASE.length + 3, `此时点还没打满（实际 ${JSON.stringify(label.textContent)}）`);
   await waitFor(() => label.textContent === BASE + '...', 4000);

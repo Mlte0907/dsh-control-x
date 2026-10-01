@@ -59,8 +59,26 @@ $script:Dots    = ''
 $script:Shown   = 0
 $script:Bg      = [System.Drawing.Color]::FromArgb(35, 36, 42)
 $script:Fg      = [System.Drawing.Color]::FromArgb(238, 238, 238)
-$script:Accent  = [System.Drawing.Color]::FromArgb(74, 125, 255)
 $script:Visible = $false
+
+# Status dot cycles red -> amber -> blue, one colour every 2s (user spec 2026-10-01).
+# Phase is taken off the wall clock, so switches land on whole seconds instead of
+# jittering with the frame rate.
+$script:DotColors  = @(
+  [System.Drawing.Color]::FromArgb(239, 68, 68),
+  [System.Drawing.Color]::FromArgb(234, 179, 8),
+  [System.Drawing.Color]::FromArgb(59, 130, 246)
+)
+$script:DotCycleMs = 2000
+# Opacity while the banner is up. At startup it is forced to 0 first; see the
+# comment next to Application.Run() for why.
+$script:FadeOpacity = 0.82
+
+function Get-CxDotColor() {
+  $elapsed = [int]((Get-Date -UFormat %s)) * 1000 + [int]((Get-Date).Millisecond)
+  $idx = [int][math]::Floor(($elapsed / $script:DotCycleMs)) % $script:DotColors.Length
+  return $script:DotColors[$idx]
+}
 
 # Accept only #RGB / #RRGGBB / #AARRGGBB. Anything else keeps the default instead of
 # throwing: a bad color from outside must not be able to kill the overlay, because
@@ -87,7 +105,7 @@ $form.BackColor      = $script:Bg
 $form.Text           = 'dsh-control-x-banner'
 $form.Name           = 'dsh-control-x-banner'
 $form.Size           = New-Object System.Drawing.Size(420, $height)
-$form.Opacity        = 0.82
+$form.Opacity        = $script:FadeOpacity
 
 $form.Add_Shown({
   $h = $form.Handle
@@ -121,7 +139,7 @@ $form.Add_Paint({
   $g.DrawRectangle($border, 1, 1, $form.Width - 3, $form.Height - 3)
 
   $cy = [int](($form.Height - $dotSize) / 2)
-  $brush = New-Object System.Drawing.SolidBrush $script:Accent
+  $brush = New-Object System.Drawing.SolidBrush (Get-CxDotColor)
   $g.FillEllipse($brush, $padX, $cy, $dotSize, $dotSize)
   $brush.Dispose()
 
@@ -172,17 +190,23 @@ function Set-CxGeometry {
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 80
 
+# Read the state file once. Shared by the tick and the pre-Show pass below so the
+# two cannot drift apart.
+function Read-CxState() {
+  try {
+    if (Test-Path -LiteralPath $StatePath) {
+      $raw = [System.IO.File]::ReadAllText($StatePath)
+      if (-not [string]::IsNullOrWhiteSpace($raw)) { return ($raw | ConvertFrom-Json) }
+    }
+  } catch { return $null }
+  return $null
+}
+
 $timer.Add_Tick({
   # One bad frame must never cost us the banner: every stage is isolated so a
   # geometry failure cannot stall the typing counter or the show/hide state.
   try {
-    $state = $null
-    try {
-      if (Test-Path -LiteralPath $StatePath) {
-        $raw = [System.IO.File]::ReadAllText($StatePath)
-        if (-not [string]::IsNullOrWhiteSpace($raw)) { $state = $raw | ConvertFrom-Json }
-      }
-    } catch { $state = $null }
+    $state = Read-CxState
 
     $wantVisible = $false
     if ($null -ne $state -and $state.active -eq $true) {
@@ -212,6 +236,9 @@ $timer.Add_Tick({
     # agreed with itself and never issued the Hide(), leaving an empty box
     # pinned at (0,0) on screen from startup until the next real transition.
     if ($wantVisible) {
+      # Opacity is 0 until the very first decision to show, so the frame that
+      # Application.Run() forces onto the screen can never be the wrong one.
+      if ($form.Opacity -ne $script:FadeOpacity) { $form.Opacity = $script:FadeOpacity }
       if (-not $form.Visible) { $form.Show() }
     } else {
       if ($form.Visible) { $form.Hide() }
@@ -226,9 +253,28 @@ $timer.Add_Tick({
   }
 })
 
+# Application.Run($form) shows the form by itself, at whatever Size/Location the
+# form happens to have, which is the constructor default (0,0 / 420x40). That is
+# the top-left flash users reported: the window appears in the corner, then the
+# first tick drags it to the centre. So before we ever Run, we read the state and
+# compute the real geometry, and we start fully transparent. The first visible
+# frame is then already in the right place at the right size.
+$pre = Read-CxState
+if ($null -ne $pre -and $pre.active -eq $true) {
+  $script:Base = [string]$pre.text
+  $script:Dots = [string]$pre.dots
+  $bg = Convert-CxColor $pre.bg $script:Bg
+  $fg = Convert-CxColor $pre.fg $script:Fg
+  $script:Bg = $bg
+  $script:Fg = $fg
+  $form.BackColor = $bg
+}
+$form.Opacity = 0
+try { Set-CxGeometry } catch { }
+
 # A WinForms Timer is created INACTIVE; without an explicit Start() its Tick never
-# runs. The first tick must land almost immediately: Application.Run($form) shows
-# the form by itself, so the very first job of the tick is to hide it again.
+# runs. The first tick must land almost immediately: it is the thing that decides
+# show-vs-hide for the frame Run just forced onto the screen.
 $timer.Interval = 16
 $timer.Start()
 [System.Windows.Forms.Application]::Run($form)

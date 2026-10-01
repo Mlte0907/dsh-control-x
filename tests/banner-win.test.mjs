@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { bannerState, stateSignature, createDesktopBanner, BANNER_TEXT, BANNER_DOTS } from '../lib/banner-win.js';
+import { bannerState, stateSignature, createDesktopBanner, BANNER_TEXT, BANNER_DOTS, DOT_COLORS, DOT_CYCLE_MS } from '../lib/banner-win.js';
 import { createActivityTracker } from '../lib/desktop/activity.js';
 
 const BASE = { active: true, running: true, tool: 'x_desktop_value', kind: 'desktop', since: 1, idleMs: 0, graceMs: 5000 };
@@ -19,7 +19,7 @@ test('文案固定且不带工具名（用户 2026-10-01：不要给我多加字
   const desk = bannerState(BASE);
   const brow = bannerState({ ...BASE, kind: 'browser', tool: 'x_browser_open' });
   assert.equal(desk.text, BANNER_TEXT);
-  assert.equal(desk.text, 'X-Agent 正在操控面');
+  assert.equal(desk.text, 'X-Agent正在控制电脑，操控键鼠会打断操作');
   assert.equal(brow.text, BANNER_TEXT, '桌面与浏览器共用一句，不因 kind 改文案');
   assert.ok(!desk.text.includes('x_desktop_value'), '文案里不能出现工具名');
   assert.ok(!desk.text.includes('（'), '不拼空括号');
@@ -153,6 +153,49 @@ test('apply() 不得在加载时就拉横幅（按需：只有 onBegin 里那一
   assert.equal(calls.length, 1, `banner.start() 出现 ${calls.length} 次，只允许 onBegin 钩子里那一次；` +
     '在 apply() 里直接调就又变成随 DSH 启动常驻了');
   assert.match(src, /onBegin:/, '横幅必须挂在活动跟踪器的 onBegin 上才会被按需拉起');
+});
+
+test('状态点三色循环：红→黄→蓝，每 2 秒换一个（用户 2026-10-01）', () => {
+  assert.deepEqual([...DOT_COLORS], ['#ef4444', '#eab308', '#3b82f6'], '红/琥珀/蓝三色');
+  assert.equal(DOT_CYCLE_MS, 2000);
+  assert.equal(DOT_COLORS.length, 3, '只有三色，循环回第一色');
+});
+
+test('浮窗不得在左上角闪一下：Run 之前必须先算好几何 + 全透明起步', () => {
+  // 用户实测报告的现象。成因：Application.Run($form) 会拿构造默认值
+  // (0,0 / 420x40) 把窗体显示出来，第一个 tick 才把它挪到正中。
+  // 修法：Run 之前先读状态、先 Set-CxGeometry，并把 Opacity 压到 0，
+  // 让"Run 强行显示的那一帧"不可能是错的。
+  const src = readFileSync(new URL('../lib/banner-overlay.ps1', import.meta.url), 'utf8');
+  const runIdx = src.indexOf('Application]::Run($form)');
+  assert.ok(runIdx > 0, '应能找到 Application.Run');
+  const before = src.slice(0, runIdx);
+  assert.match(before, /^\s*\$form\.Opacity = 0\s*$/m, 'Run 之前必须先把不透明度压到 0');
+  assert.match(before, /try \{ Set-CxGeometry \} catch \{ \}/, 'Run 之前必须先算好几何，否则第一帧就在左上角');
+  assert.match(src, /Get-CxDotColor/, 'Paint 要用三色圆点');
+  assert.doesNotMatch(src, /\$script:Accent/, '旧的单色 Accent 必须彻底换掉');
+});
+
+test('物理输入门控：confirm_disturbance 以前收了却从不看（真 bug）', () => {
+  // 用户 2026-10-01 实测：传了 confirm_disturbance: true 仍被"未获用户批准"挡下。
+  // 根因：guardPhysical(exec, toolName, label) 的签名里根本没有这个参数，
+  // 三个调用点也没传。schema 与工具描述都把它写成出口，代码却无视。
+  const src = readFileSync(new URL('../lib/desktop/tools.js', import.meta.url), 'utf8');
+  assert.match(src, /guardPhysical = async \(exec, toolName, label, confirm\)/, '门控必须真的接收 confirm');
+  for (const tool of ['x_desktop_mouse_click', 'x_desktop_type', 'x_desktop_key']) {
+    assert.match(
+      src,
+      new RegExp(`guardPhysical\\(exec, '${tool}', el\\.name, args\\.confirm_disturbance\\)`),
+      `${tool} 必须把 confirm_disturbance 传进门控`,
+    );
+  }
+  // 'rejected' 表示确实有人点了拒绝：自认与信任开关都不该放行。
+  // 所以 confirm 只许出现在 'unavailable' 那一支里，位置必须在其后。
+  const unavail = src.indexOf("if (outcome === 'unavailable') {");
+  const confirmAt = src.indexOf('if (confirm === true)');
+  assert.ok(unavail > 0, '应存在 unavailable 分支');
+  assert.ok(confirmAt > unavail, 'confirm 的判断必须落在 unavailable 分支之后');
+  assert.match(src, /if \(trustPhysicalInput\) \{/, '「全权操控」开关必须真的被读');
 });
 
 test('浮窗脚本不含 CJK 字面量（Windows PowerShell 无 BOM 按 ANSI 解码会解析失败）', () => {
