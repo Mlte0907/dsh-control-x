@@ -63,7 +63,7 @@ const JPEG = Buffer.from(
   'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA' +
   'AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==', 'base64');
 
-function setup({ elements = tree(13, 4), shotOk = true } = {}) {
+function setup({ elements = tree(13, 4), shotOk = true, shotEnabled = true } = {}) {
   DesktopManager.prototype.runHelper = async function (command) {
     if (command === 'observe') return structuredClone(elements);
     if (command === 'window_rect') return structuredClone(RECT);
@@ -80,7 +80,7 @@ function setup({ elements = tree(13, 4), shotOk = true } = {}) {
     { get: (n) => (n === 'approval' ? { request: async () => 'allowed-once' }
       : n === 'attachments' ? { saveImage: async () => ({ attachmentId: 'sha256:x', mediaType: 'image/jpeg', bytes: JPEG.length, width: 1965, height: 1106, name: 'a.jpg' }) }
         : undefined), logger: { info() {}, warn() {} } },
-    { ttlMs: 30000, allowedApps: [], physicalIdleMs: 0, trustPhysicalInput: true },
+    { ttlMs: 30000, allowedApps: [], physicalIdleMs: 0, trustPhysicalInput: true, desktopShotEnabled: shotEnabled },
   );
   return list;
 }
@@ -165,6 +165,49 @@ test('x_desktop_shot：schema 不得声明被忽略的窗口参数（observation
   }
 });
 
+test('截图开关：默认关，且关着时如实报"用户的选择"而不是假装可用', async () => {
+  const list = setup({ shotEnabled: false });
+  const obs = await byName(list, 'x_desktop_tree').execute({});
+  await assert.rejects(
+    () => byName(list, 'x_desktop_shot').execute({ observation: obs.observation }),
+    (e) => e.code === 'ACTION_UNAVAILABLE'
+      // 三样必须都在：是谁关的、为什么关、以及不要绕过
+      && /用户/.test(e.message) && /密码/.test(e.message) && /不要绕过/.test(e.message),
+    '拒绝信息必须让模型能转述给用户，且明确禁止绕过',
+  );
+  // 默认值本身：必须是"关"。这里用 undefined 模拟"用户从没碰过这个设置"
+  const bare = buildDesktopTools({ get: () => undefined, logger: { info() {}, warn() {} } },
+    { ttlMs: 30000, allowedApps: [], physicalIdleMs: 0, trustPhysicalInput: true });
+  const o2 = await byName(bare, 'x_desktop_tree').execute({});
+  await assert.rejects(
+    () => byName(bare, 'x_desktop_shot').execute({ observation: o2.observation }),
+    (e) => e.code === 'ACTION_UNAVAILABLE',
+    '没配 desktopShotEnabled 时必须视为关（fail-closed），不能当成开',
+  );
+});
+
+test('截图开关：关着时 degradedReason 不能还在推荐截图（否则就是"文档说能用实际必失败"）', async () => {
+  const off = setup({ shotEnabled: false });
+  const on = setup({ shotEnabled: true });
+  const rOff = await byName(off, 'x_desktop_tree').execute({});
+  const rOn = await byName(on, 'x_desktop_tree').execute({});
+  assert.equal(rOff.degraded, true);
+  assert.equal(rOn.degraded, true);
+  assert.doesNotMatch(rOff.degradedReason, /x_desktop_shot 看图/,
+    '截图关着时还让模型去截图 = 让它必然撞一次 ACTION_UNAVAILABLE');
+  assert.match(rOff.degradedReason, /截图当前被用户关闭/);
+  assert.match(rOff.degradedReason, /密码/, '必须把"为什么默认关"一并讲清，否则模型会去劝用户开');
+  assert.match(rOff.degradedReason, /x_desktop_key/, '必须给出关着时仍然能走的路');
+  assert.match(rOn.degradedReason, /x_desktop_shot/, '开关打开时才推荐截图');
+});
+
+test('截图开关：工具仍然注册（否则模型无法解释"为什么看不了"）', () => {
+  const list = setup({ shotEnabled: false });
+  assert.ok(byName(list, 'x_desktop_shot'),
+    '开关关着时工具必须仍可见——不注册等于模型不知道有这条路径，'
+    + '也就无法向用户解释，这是真正的「文档说能用实际必失败」');
+});
+
 test('x_desktop_shot：PrintWindow 失败/全黑时如实报错，不返回空图', async () => {
   const list = setup({ shotOk: false });
   const obs = await byName(list, 'x_desktop_tree').execute({});
@@ -182,7 +225,8 @@ test('x_desktop_shot：无 attachments 服务时如实报不可用（不静默�
     throw new Error('stub ' + c);
   };
   const list = buildDesktopTools({ get: () => undefined, logger: { info() {}, warn() {} } },
-    { ttlMs: 30000, allowedApps: [], physicalIdleMs: 0, trustPhysicalInput: true });
+    // 截图开关要开着，才轮到"没挂 attachments"成为真正的失败原因
+    { ttlMs: 30000, allowedApps: [], physicalIdleMs: 0, trustPhysicalInput: true, desktopShotEnabled: true });
   const obs = await byName(list, 'x_desktop_tree').execute({});
   await assert.rejects(
     () => byName(list, 'x_desktop_shot').execute({ observation: obs.observation }),

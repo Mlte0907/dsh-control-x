@@ -338,10 +338,27 @@ GET  /api/x-control/activity  → {overlay, active, running, graceMs}
 
 | 环节 | 工具 | 行为 |
 |---|---|---|
-| 识别 | `x_desktop_tree` | 多输出 `namedCount` 与 `degraded`。`degraded=true` 时附带 `degradedReason`，里面写明"语义动作不可用、重试观察无用、改走截图+坐标"——模型必须机器可读地知道，而不是靠人猜 |
-| 识别 | `x_desktop_shot` | 窗口级 JPEG 截图。`PrintWindow` + `PW_RENDERFULLCONTENT` 让窗口自己画，**不受遮挡影响**。近黑帧直接判失败（"没画面" ≠ "一个黑色的应用"）。严格绑定 observation，不能凭 hwnd 截任意窗口 |
+| 识别 | `x_desktop_tree` | 多输出 `namedCount` 与 `degraded`。`degraded=true` 时附带 `degradedReason`，里面写明"语义动作不可用、重试观察无用"——模型必须机器可读地知道，而不是靠人猜 |
+| 识别 | `x_desktop_shot` | 窗口级 JPEG 截图。`PrintWindow` + `PW_RENDERFULLCONTENT` 让窗口自己画，**不受遮挡影响**。近黑帧直接判失败（"没画面" ≠ "一个黑色的应用"）。严格绑定 observation，不能凭 hwnd 截任意窗口。**默认被用户关闭**，见下 |
 | 动作 | `x_desktop_click_at` | 窗口内坐标点击。**不解析任何元素**，所以树空掉也能用；坐标越界即拒；过全套物理门控（三重门控 + 向用户明示 + 降采样换算提示） |
 | 键盘 | `x_desktop_key` / `x_desktop_type` | 本来就不依赖元素，树空掉时仍可用 |
+
+**截图开关 `desktopShotEnabled`（默认关，2026-10-03 与用户定案）**：不跟 `desktopEnabled`
+一起默认开，理由是一处不对称——树只给控件结构，而 `x_desktop_value` 遇密码框是
+**helper 内 fail-closed 硬拒绝**；截图是像素，**这层保护不存在**（自绘控件的密码框在树里
+可能压根没标成密码框，明文就这样进模型上下文了）。
+
+改动它时**三处必须同步**，少一处就退化成「文档说能用实际必失败」：
+
+1. 工具**仍然注册**（`tests/degraded-fallback.test.mjs` 有测试钉住）。不注册的话模型
+   连这条路径存在都不知道，无法向用户解释"为什么这个应用看不了"。
+2. `lib/desktop/tools.js` 的拒绝信息必须三要素齐全：是谁关的、为什么关、**不要绕过**。
+3. `lib/desktop/manager.js` 的 `degradedReason` **随开关变**：关着时不再推荐
+   `x_desktop_shot`，改说"截图被用户关闭" + 给出仍能走的路（key/type）。
+
+另注意：默认关的开关要用 `=== true` 读（`lib/client.js` 与 `lib/index.js` 都是），
+写成 `!== false` 会把"没配"当成"开"，正好把默认关翻过来——`smoke.test.mjs` 有一条测试
+专门守这个。
 
 - 已排除：不是权限问题；不是总开关；**UIA 客户端二次查询不会触发动态物化**（实测）；
   DSH 的 19387 端口是内部 API 不是 CDP，无法免重启启用。

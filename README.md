@@ -85,7 +85,15 @@ dsh --profile <你的profile名> \
 现在 Electron 应用走 ZCode 式的 `strategy:auto`：树能用就用树，`x_desktop_tree` 会用
 `degraded=true` 机器可读地告诉你"这棵树不能当主干"（DSH 首次观察实测 13 元素 / 4 有名字）；
 不能用就 `x_desktop_shot`（`PrintWindow` 窗口级截图，不受遮挡影响）+ `x_desktop_click_at`
-（纯坐标点击，走全套物理门控）。插件不再修改任何应用或宿主的启动配置。
+（纯坐标点击，走全套物理门控）。
+
+**`x_desktop_shot` 默认关闭**，需要在设置页「X-Agent操控 → 电脑控制 → 允许窗口截图」
+显式打开。理由是一处**树有而截图没有的缺口**：无障碍树只给控件结构，而 `x_desktop_value`
+遇到密码框是**直接拒绝**的；截图是像素，这层保护不存在——自绘控件的密码框在树里可能
+压根没标出来，截图就把明文拍下来了。绝大多数机器用不到这条（现代 Chrome/Edge 138+
+默认已开原生无障碍树），建议保持关闭。
+
+插件不再修改任何应用或宿主的启动配置。
 详见 [CHANGELOG.md](CHANGELOG.md)。
 
 **v0.5.18（2026-10-02）**：**修复面板 HTTP 接口无鉴权的高危缺陷**——`/api/x-control/*`
@@ -128,7 +136,7 @@ UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 
 - 浏览器：`x_browser_tabs` / `x_browser_open` / `x_browser_read` / `x_browser_click` / `x_browser_fill` / `x_browser_press` / `x_browser_scroll` / `x_browser_shot` / `x_browser_wait` / `x_browser_close`
 - 桌面语义（零注入）：`x_desktop_apps` / `x_desktop_tree` / `x_desktop_press` / `x_desktop_value` / `x_desktop_scroll` / `x_desktop_launch`
 - 桌面物理（显式打扰，三重门控）：`x_desktop_mouse_click` / `x_desktop_type` / `x_desktop_key`
-- 桌面兜底（树不可用时）：`x_desktop_shot`（窗口级截图）/ `x_desktop_click_at`（窗口内坐标点击）
+- 桌面兜底（树不可用时）：`x_desktop_shot`（窗口级截图，**默认关闭**）/ `x_desktop_click_at`（窗口内坐标点击）
 - 视觉：`x_vision_describe`（截图 → 视觉模型 → 文字描述，给不支持图片输入的会话模型补眼睛；模型在设置页选，默认「系统推荐」）
 
 ### 本地开发

@@ -176,6 +176,26 @@ test('总开关门控：browserEnabled/desktopEnabled 关闭后工具拒绝执�
   config.desktopEnabled = true;
 });
 
+test('截图开关默认关：没配 desktopShotEnabled 时 x_desktop_shot 必须拒绝（fail-closed）', async (t) => {
+  // 这一条守的是"默认关"三个字。默认关的开关最容易被写成 !== false 而翻成开——
+  // 那等于把隐私边界悄悄作废了，而没人会注意到。
+  const { ctx, registered, dispose } = makeMockCtx();
+  t.after(dispose);
+  apply(ctx, { headless: true, ttlMs: 30000, allowedApps: [], browserEnabled: true, desktopEnabled: true });
+  await registered.get('x_activate').execute({}, {});
+  assert.ok(registered.has('x_desktop_shot'), '工具仍须注册，否则模型无法解释为什么看不了');
+
+  await assert.rejects(
+    () => registered.get('x_desktop_shot').execute({ observation: 'whatever' }, {}),
+    (err) => err.code === 'ACTION_UNAVAILABLE' && /用户/.test(err.message),
+    '未配置时必须按"关"处理',
+  );
+
+  const status = await registered.get('x_status').execute({}, {});
+  assert.equal(status.config.desktopShotEnabled, false,
+    'x_status 必须如实报出开关状态（在 config 下），模型才知道能做什么');
+});
+
 test('所有工具的 parameters 根必须显式 type:object（DeepSeek API 硬校验，缺了整请求 HTTP 400）', async (t) => {
   const { ctx, registered, dispose } = makeMockCtx();
   t.after(dispose);
