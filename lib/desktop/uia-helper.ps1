@@ -135,16 +135,34 @@ function Invoke-PatternAction($el, $action) {
     throw [XControlException]::new('ACTION_UNAVAILABLE', "元素不支持任何语义动作（通告：$($supported -join ', ')）。")
 }
 
-function Find-ByRuntimeId($window, $runtimeId) {
+function Find-ByRuntimeId($window, $runtimeId, $expect) {
     $all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.Condition]::TrueCondition)
     $want = ($runtimeId -join '.')
-    foreach ($el in $all) {
+    $el = $null
+    foreach ($e in $all) {
         try {
-            if ((($el.GetRuntimeId()) -join '.') -eq $want) { return $el }
+            if ((($e.GetRuntimeId()) -join '.') -eq $want) { $el = $e; break }
         } catch { continue }  # 元素已消失：跳过，最终按未命中处理
     }
-    return $null
+    if ($null -eq $el) { return $null }
+    # 身份核对（TTL 软化的安全边界）：RuntimeId 理论上可被复用，动作前必须确认
+    # 当前元素的 角色+名称 与观察时一致，防止对错位元素执行动作。
+    if ($null -ne $expect) {
+        try {
+            $gotRole = Get-RoleName $el
+            $gotName = $el.Current.Name
+            if ($gotRole -ne $expect.role -or $gotName -ne $expect.name) {
+                throw [XControlException]::new('STALE_STATE',
+                    "元素身份已变化：观察时是 $($expect.role) 「$($expect.name)」，现在同一 RuntimeId 是 $gotRole 「$gotName」。界面已更新——请重新 x_desktop_tree，不要对错位元素执行动作。")
+            }
+        } catch [XControlException] {
+            throw
+        } catch {
+            throw [XControlException]::new('STALE_STATE', '元素身份无法读取（可能已消失）。请重新 x_desktop_tree。')
+        }
+    }
+    return $el
 }
 
 function Observe-Tree($win, $maxElements) {
@@ -222,7 +240,7 @@ try {
         }
         'press' {
             $win = Resolve-Window $req
-            $el = Find-ByRuntimeId $win @($req.runtimeId)
+            $el = Find-ByRuntimeId $win @($req.runtimeId) $req.expect
             if ($null -eq $el) { throw [XControlException]::new('ELEMENT_UNAVAILABLE', '观察快照已失效：元素在当前窗口树中不存在。请重新调用 x_desktop_tree。') }
             $used = Invoke-PatternAction $el $req.action
             $nc = $win.Current
@@ -230,7 +248,7 @@ try {
         }
         'set_value' {
             $win = Resolve-Window $req
-            $el = Find-ByRuntimeId $win @($req.runtimeId)
+            $el = Find-ByRuntimeId $win @($req.runtimeId) $req.expect
             if ($null -eq $el) { throw [XControlException]::new('ELEMENT_UNAVAILABLE', '观察快照已失效：元素在当前窗口树中不存在。请重新调用 x_desktop_tree。') }
             if ($el.Current.IsPassword) {
                 throw [XControlException]::new('NOT_SETTABLE', '敏感输入保护：密码框拒绝自动写入——密码必须由用户本人输入。')
@@ -250,7 +268,7 @@ try {
             # 物理点击路径的前置取证：元素矩形 + 窗口是否前台。
             # 本命令只读；真正的前置与点击由 Node 侧的显式打扰门控执行（§6.7-4）。
             $win = Resolve-Window $req
-            $el = Find-ByRuntimeId $win @($req.runtimeId)
+            $el = Find-ByRuntimeId $win @($req.runtimeId) $req.expect
             if ($null -eq $el) { throw [XControlException]::new('ELEMENT_UNAVAILABLE', '观察快照已失效：元素不存在。请重新观察。') }
             $r = $el.Current.BoundingRectangle
             $nc = $win.Current
@@ -269,7 +287,7 @@ try {
             }
         }
         'scroll' {            $win = Resolve-Window $req
-            $el = Find-ByRuntimeId $win @($req.runtimeId)
+            $el = Find-ByRuntimeId $win @($req.runtimeId) $req.expect
             if ($null -eq $el) { throw [XControlException]::new('ELEMENT_UNAVAILABLE', '观察快照已失效：元素不存在。请重新观察。') }
             $sp = $null
             try { $sp = $el.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern) } catch {}
@@ -284,6 +302,56 @@ try {
                 default { throw [XControlException]::new('INTERNAL', "direction 必须是 up/down/left/right，收到 $($req.direction)") }
             }
             Out-Result @{ used = 'ScrollPattern' }
+        }
+        'launch' {
+            # 启动应用并轮询定位真实顶层窗口（单次 spawn 内完成）。
+            # 2026-10-02 飞书实测：Start-Process -PassThru 的 pid 可能只是启动器，
+            # 真实窗口在另一个 pid——用「启动前 hwnd 快照 → 新窗口 → 进程名兜底」定位。
+            $before = @{}
+            try {
+                foreach ($w in (Get-TopWindows)) { $before[[string]$w.hwnd] = $true }
+            } catch { }
+            $targetPath = '' + $req.target
+            if ($targetPath.ToLower().EndsWith('.lnk')) {
+                try {
+                    $shLocal = New-Object -ComObject WScript.Shell
+                    $tl = $shLocal.CreateShortcut($targetPath)
+                    if ($tl.TargetPath) { $targetPath = '' + $tl.TargetPath }
+                } catch { }
+            }
+            $nameKey = ''
+            try { $nameKey = [System.IO.Path]::GetFileNameWithoutExtension($targetPath).ToLower() } catch { }
+            $p = if ($req.args) { Start-Process -FilePath $req.target -ArgumentList $req.args -PassThru }
+                 else          { Start-Process -FilePath $req.target -PassThru }
+            $launchPid = $p.Id
+            $window = $null
+            $matched = ''
+            for ($i = 0; $i -lt 18 -and $null -eq $window; $i++) {
+                Start-Sleep -Milliseconds 700
+                try {
+                    foreach ($w in (Get-TopWindows)) {
+                        if ($before.ContainsKey([string]$w.hwnd)) { continue }
+                        if ($w.title -and $w.title.Trim().Length -gt 0) {
+                            $window = @{ pid = $w.pid; title = $w.title; className = $w.className; hwnd = $w.hwnd; processName = $w.processName }
+                            $matched = 'new'
+                            break
+                        }
+                    }
+                } catch { }
+            }
+            if ($null -eq $window -and $nameKey) {
+                # 没出现新窗口：应用可能已在运行（单实例把既有窗口提到前台），按进程名兜底。
+                try {
+                    foreach ($w in (Get-TopWindows)) {
+                        if ($w.processName -and $w.processName.ToLower().Contains($nameKey) -and $w.title) {
+                            $window = @{ pid = $w.pid; title = $w.title; className = $w.className; hwnd = $w.hwnd; processName = $w.processName }
+                            $matched = 'existing'
+                            break
+                        }
+                    }
+                } catch { }
+            }
+            Out-Result @{ pid = $launchPid; window = $window; matched = $matched }
         }
         default {
             Out-Fail 'INTERNAL' "未知命令 $($req.command)"
