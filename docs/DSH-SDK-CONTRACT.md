@@ -153,6 +153,7 @@ desktop 应用自带凭据，M1 在其中做首次真实调用验证。
 | 观察树有 maxElements 上限（默认 200，可调 500）——元素计数类断言会被 cap 掩盖 | 效果验证应使用**状态字段**（value/toggleState）而非元素计数 |
 | 观察性能：499 元素全量 ~850ms（含 PowerShell 进程启动 ~1s 另计） | 每工具调用 spawn 一次 helper 可接受；常驻 helper 为后续优化项 |
 | x_desktop_value 写入"复制字符"Edit、Toggle 高级查看，全程未抢焦点（charmap 窗口 focused=false） | §6.7-3 在 Windows 上成立的直接证据 |
+| **Electron 应用（含 DSH 本体）默认不向 UIA 物化渲染器无障碍树**：DSH 窗口只暴露 13 个无名 Pane + 最小化/最大化/关闭，`Document` 无名无子树——「工具能调但看不见什么」（2026-10-02 实测） | 用 `--force-renderer-accessibility` 重启 DSH 后同一窗口从 **14 个元素变为 599 个**，侧栏/会话树/按钮/文本全部可读。UIA 客户端二次查询不会触发动态物化（实测无效）。已把该旗标写进开始菜单与桌面快捷方式；代价是渲染器多一份无障碍树的开销，撤销 = 删掉快捷方式里的参数 |
 
 ## 12. 双 home 陷阱（M5 实测，2026-09-30）
 
@@ -163,3 +164,34 @@ desktop 应用自带凭据，M1 在其中做首次真实调用验证。
   `node fs`/`cmd dir`，Git Bash 的 `ls` 在本机对新建目录的枚举偶发不可见（另见 §11 编码坑）。
 - 插件的浏览器 profile 目录用 `os.homedir()`（= C 盘用户目录），与 DSH home（D 盘）不在同一卷：
   功能无影响，注意备份/迁移时两处都要看。
+
+## 13. 工具返回值的 lossless 快照门（2026-10-02 抽 app.asar 源核实）
+
+宿主对工具返回值的处理在 `@deepseek-ai/dsh-tools` 的 `createSuccessResult`：
+**先**用 `@deepseek-ai/dsh-util-values` 的 `snapshotJsonValue` 做无损快照，**再**用
+output.schema 校验（`validateJsonSchemaValue`）。快照失败的报错只有一句
+`tool "x" returned invalid output: value is not lossless JSON`（`ToolOutputError` /
+`INVALID_TOOL_OUTPUT`），**不说坏在哪**——这就是 HANDOVER §10.2 挂了两轮的那个错。
+
+`snapshotJsonValue`（walkJsonValue detach 模式）拒绝的值，插件侧镜像实现见
+`lib/core/lossless.js`：
+
+- 非有限数（NaN / ±Infinity）与 **-0**；
+- 一切 JSON 之外的类型，**包括嵌套的 undefined**（顶层 undefined 也拒）；
+- 原型不纯净：数组必须本征 `Array.prototype`，对象必须 `Object.prototype` 或 `null`
+  （Date/Map/类实例/伪造原型一律拒；跨 realm 用本征构造器识别，从简镜像即可）；
+- 数组带空洞或多余自有属性（`Reflect.ownKeys(arr).length !== arr.length + 1`）；
+- 对象的 Symbol 自有键或不可枚举自有键（整单拒）；
+- 循环引用。
+
+关键教训：**schema 校验根本走不到**——快照在前。所以「schema 没声明这个键」之类
+的怀疑方向全是错的（`additionalProperties` 未设 false 时多返回键不报错）；
+0.5.9 的真因是 `cfg` 漏写 `bannerIdleExitMs` getter → `x_status` 返回
+`config.bannerIdleExitMs: undefined` → 快照拒绝。仓库内测试全部直接调 `execute`、
+不经过宿主，所以 75 个测试全绿照样翻车。→ `defineXTool` 现在在返回边界跑同一规则
+（`losslessJsonViolations`），坏点点名到路径，测试当场能抓。
+
+抽宿主源码的方法：交接单曾说「宿主侧解码逻辑拿不到」，实际 `app.asar` 里 JS 未压缩，
+`scripts/host-contract-verify.mjs` 的 `readAsarIndex` 就能定位任意文件按偏移量读出——
+本节事实即由此抽取核实（`dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js:2578`、
+`dsh-util-values/lib/index.js`）。

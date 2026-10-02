@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { apply, name as pluginName } from '../lib/index.js';
 import { validateAgainstSchema } from '../lib/core/tool.js';
+import { losslessJsonViolations } from '../lib/core/lossless.js';
 
 function makeMockCtx() {
   const registered = new Map();
@@ -48,6 +49,62 @@ test('x_status 报的版本等于 package.json 的真实版本（防再写死）
   const declared = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
   assert.equal(value.version, declared, `x_status 报 ${value.version}，package.json 是 ${declared}`);
   assert.match(value.version, /^\d+\.\d+\.\d+/, '版本形如 x.y.z，不允许再出现 0.0.1 这类占位值');
+});
+
+test('x_status 返回值通过宿主无损 JSON 快照规则（0.5.9 cfg 漏 getter 回归）', async (t) => {
+  const { ctx, registered, dispose } = makeMockCtx();
+  t.after(dispose);
+  apply(ctx, { headless: true });
+  const value = await registered.get('x_status').execute({}, {});
+  // 宿主在 schema 校验之前先做 lossless 快照，嵌套 undefined 整单拒绝且不报坏点
+  // （0.5.9 的 x_status 就因 cfg.bannerIdleExitMs 漏 getter 而翻车）。
+  assert.deepEqual(losslessJsonViolations(value), []);
+  assert.equal(typeof value.config.bannerIdleExitMs, 'number', 'bannerIdleExitMs 必须是数字——设置页那个字段要真的生效');
+});
+
+test('losslessJsonViolations 镜像宿主规则：undefined / 非纯净原型 / 循环引用 / NaN / 空洞数组 / -0', () => {
+  assert.deepEqual(losslessJsonViolations({ ok: 1, nested: { list: ['a', 2, null] } }), []);
+  assert.match(losslessJsonViolations({ a: undefined })[0], /value\.a/);
+  assert.match(losslessJsonViolations({ ok: true, when: new Date() })[0], /原型/);
+  const cyc = {};
+  cyc.self = cyc;
+  assert.match(losslessJsonViolations(cyc)[0], /循环引用/);
+  assert.match(losslessJsonViolations({ n: Number.NaN })[0], /有限/);
+  const holey = new Array(2);
+  holey[1] = 1;
+  assert.ok(losslessJsonViolations(holey).length > 0, '带空洞的数组被拒');
+  assert.match(losslessJsonViolations(-0)[0], /-0/);
+});
+
+test('契约门：返回值带嵌套 undefined 时当场报错并点名路径', async () => {
+  const { defineXTool } = await import('../lib/core/tool.js');
+  const tool = defineXTool({
+    name: 'x_lossy',
+    description: 'test',
+    outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+    render: () => [{ type: 'text', text: '' }],
+    execute: async () => ({ ok: true, nested: { bad: undefined } }),
+  });
+  await assert.rejects(
+    () => tool.execute({}, {}),
+    (err) => err.code === 'INTERNAL' && /value\.nested\.bad/.test(err.message),
+  );
+});
+
+test('契约门：返回值缺必填键报 ControlXError（回归：此前缺 import，真触发是 ReferenceError）', async () => {
+  const { defineXTool } = await import('../lib/core/tool.js');
+  const { ControlXError } = await import('../lib/core/errors.js');
+  const tool = defineXTool({
+    name: 'x_missing',
+    description: 'test',
+    outputSchema: { type: 'object', properties: { ok: { type: 'boolean', required: true } } },
+    render: () => [{ type: 'text', text: '' }],
+    execute: async () => ({}),
+  });
+  await assert.rejects(
+    () => tool.execute({}, {}),
+    (err) => err instanceof ControlXError && err.message.includes('ok'),
+  );
 });
 
 test('参数校验：必填缺失与类型错误都能拦下', () => {

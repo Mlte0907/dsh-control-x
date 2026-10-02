@@ -1,5 +1,52 @@
 # 更新日志
 
+## 0.5.10（2026-10-02）
+
+**修掉 `x_status` 的「value is not lossless JSON」；宿主源码终于抽到了，规则全文进了仓库。**
+
+### 现象与两轮错判
+
+`x_status` 一调用就报 `value is not lossless JSON`（0.5.8 之前就坏）。当时锁定过两个
+"具体差异"：返回值 schema 有两层嵌套 object、返回了 schema 未声明的 `updateMirror`——
+**两个都不是真凶**。真正的门在更早的位置：宿主（app.asar 内 dsh-tools
+`createSuccessResult`）对返回值**先做无损 JSON 快照、再做 schema 校验**，快照拒绝
+嵌套 `undefined`，而报错只有一句、不说坏在哪。schema 方向的怀疑全白费。
+
+### 根因
+
+`apply()` 里的 `cfg` 对象**漏写了 `bannerIdleExitMs` 的 getter**，而 `x_status` 的
+返回值引用了 `cfg.bannerIdleExitMs` → 返回体带上 `config.bannerIdleExitMs: undefined`
+→ 宿主快照拒绝。连锁后果：设置页「浮窗空闲自动退出」一直是**死设置**（改了不生效，
+banner-win 用默认 120000 兜底，所以没人察觉）。
+
+### 为什么 75 个测试全绿
+
+仓库内全部测试都直接调 `execute`、不经过宿主的快照门。所以这次把门搬进插件：
+- 新增 `lib/core/lossless.js`：宿主 `snapshotJsonValue` 规则的插件侧镜像
+  （嵌套 undefined / -0 / 非有限数 / 非纯净原型 / 空洞或多余属性的数组 / Symbol 与
+  不可枚举键 / 循环引用），报错点名到路径；
+- `defineXTool` 在返回边界执行同一规则——宿主那句不给定位的报错，换成能直接定位
+  实现的错误，测试当场能抓。
+- 顺带抓到潜伏 bug：`tool.js` 缺必填键的分支抛 `ControlXError` 却**没 import**，
+  真触发会是 `ReferenceError`——已修，并补回归测试。
+
+### 改动
+
+- `cfg` 补 `bannerIdleExitMs` getter（带有限性守卫，默认 120000）——死设置复活。
+- `x_status` 的 output schema 补声明 `updateMirror`（返回了却没声明，schema 要说真话）。
+- `updater.js` 文件头仍在教人"顺手算 integrity"（与同文件 300-308 行直接矛盾）——
+  按 0.5.8 的终态结论改写。这是活的隐患：下一个读文件头的人就会把 0.5.7 的事故重演。
+- `dsh-plugin.json` 的 version 从 0.3.0 追平到 0.5.10（此前与 package.json 脱节五个月）。
+- skill 桌面循环补一条：Electron 应用只吐无名 Pane = 渲染器无障碍树未物化，
+  让用户带 `--force-renderer-accessibility` 重启该应用（对 DSH 本体实测
+  14 → 599 个元素，详见 docs/DSH-SDK-CONTRACT.md §11、§13）。
+
+### 方法论沉淀：宿主源码一直拿得到
+
+交接单曾写「需要宿主侧解码逻辑的源码，当前拿不到」——错。app.asar 里 JS 未压缩，
+`readAsarIndex` 能按偏移量读出任意文件；本次 `dsh-tools/lib/index.js:2578` 与
+`dsh-util-values` 全文由此抽出，§10.2 当场定案。
+
 ## 0.5.9（2026-10-02）
 
 **工具注册时机：默认改成启动即注册。**
