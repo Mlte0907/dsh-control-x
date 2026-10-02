@@ -8,8 +8,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   listVisionModels, pickModel, describeImage, isVisionModel,
+  candidateModels, describeImageWithFallback, describeAttempts, HOST_IMAGE_OMITTED_MARKER,
   VISION_AUTO, VISION_RANDOM,
 } from '../lib/vision.js';
 
@@ -57,7 +59,7 @@ test('选择策略：系统推荐取第一个、随机可注入、指定要能�
     { provider: 'mimo', model: 'a', name: 'A' },
     { provider: 'mimo', model: 'b', name: 'B' },
   ];
-  assert.equal(pickModel(models, VISION_AUTO).model, 'a', '系统推荐 = 列表首个（宿主按适配器偏好排序）');
+  assert.equal(pickModel(models, VISION_AUTO).model, 'a', '系统推荐 = 列表首个（宿主给的原顺序）');
   assert.equal(pickModel(models, VISION_RANDOM, () => 0.99).model, 'b', '随机可复现');
   assert.equal(pickModel(models, VISION_RANDOM, () => 0).model, 'a', 'random=0 不得越界');
   assert.equal(pickModel(models, 'mimo/b').model, 'b', 'provider/model 形式');
@@ -68,6 +70,100 @@ test('选择策略的失败要说人话：空列表 / 指定模型已消失', ()
   assert.throws(() => pickModel([], VISION_AUTO), /没有可用的视觉模型/);
   assert.throws(() => pickModel([{ provider: 'p', model: 'm', name: 'M' }], 'gone/model'),
     /不在当前已添加的视觉模型列表/);
+});
+
+// ── 2026-10-03：视觉链路在真实环境失效后的修复与防复发 ──
+// 真机证据：本机宿主声称 3 个模型支持 image，而排在首位的 opencode-go/space-bunny-free
+// 对图片返回空文本；宿主对「只吃文本的模型」会**静默**把图片块替换成一段说明文字
+// （dsh-llm/lib/types/content.js 的 textOnlyImageText），插件侧原本无从分辨
+// 「模型没话说」和「图片压根没送到」。旧实现只试 models[0] 就返回，用户看到的
+// 只有一句「没有返回任何文字」，功能整条静默死掉。
+
+test('回归：pickModel 的注释不许承诺代码里没有的选型策略', () => {
+  const src = readFileSync(new URL('../lib/vision.js', import.meta.url), 'utf8');
+  const i = src.indexOf('function pickModel');
+  const body = src.slice(i, src.indexOf('\n}', i));
+  // 只看"在陈述现状"的注释行：标明是历史/已移除的行不算承诺（那正是防复活的记录）。
+  const live = body.split('\n')
+    .filter((l) => !/此前|曾经|旧的|已移除|⚠/.test(l))
+    .join('\n');
+  const promises = /优先|偏好|最便宜/.test(live);
+  const implementsIt = /shuffle|sort|score|cost/.test(live.replace(/\/\/.*$/gm, ''));
+  assert.equal(promises && !implementsIt, false,
+    '注释不许承诺代码里不存在的排序策略——那正是本次视觉静默失效的根因之一');
+});
+
+test('候选顺序：系统推荐=宿主原顺序；random=同一批但打乱；指定=只有它', () => {
+  const models = [
+    { provider: 'p', model: 'a' }, { provider: 'p', model: 'b' }, { provider: 'p', model: 'c' },
+  ];
+  assert.deepEqual(candidateModels(models, '').map((m) => m.model), ['a', 'b', 'c'],
+    '系统推荐必须保留宿主原顺序：插件没有任何依据去重排');
+  const shuffled = candidateModels(models, 'random');
+  assert.deepEqual([...shuffled].map((m) => m.model).sort(), ['a', 'b', 'c'], 'random 不得丢候选');
+  assert.deepEqual(candidateModels(models, 'p/b').map((m) => m.model), ['b']);
+  assert.throws(() => candidateModels(models, 'p/zz'), /不在当前接入的视觉模型里/);
+  assert.throws(() => candidateModels([], ''), /没有找到任何支持图片输入的模型/);
+});
+
+/** 只按模型名回话的假 llm.stream。 */
+const scriptedLlm = (behaviour) => ({
+  stream: async function* (req) {
+    for (const c of behaviour(`${req.provider}/${req.model}`, req) ?? []) yield c;
+  },
+});
+const delta = (text) => ({ type: 'text-delta', index: 0, text });
+const FIN = { type: 'finish', reason: { kind: 'stop' } };
+const ATT = { attachmentId: 'sha256:x', mediaType: 'image/jpeg', bytes: 1, width: 2, height: 2 };
+
+test('自动回退：首个模型返回空就换下一个，且如实报告跳过了谁', async () => {
+  const llm = scriptedLlm((n) => (n === 'p/good' ? [delta('屏幕上是豆包窗口'), FIN] : [delta(''), FIN]));
+  const r = await describeImageWithFallback({
+    llm,
+    candidates: [{ provider: 'p', model: 'bad' }, { provider: 'p', model: 'good' }, { provider: 'p', model: 'never' }],
+    attachment: ATT,
+  });
+  assert.equal(r.text, '屏幕上是豆包窗口');
+  assert.equal(r.target.model, 'good');
+  assert.deepEqual(r.attempts.map((a) => [a.model, a.ok]), [['bad', false], ['good', true]],
+    '成功即停：不该白花后面的调用');
+  assert.equal(r.attempts[0].reason, 'empty');
+  assert.match(describeAttempts(r.attempts), /good 看图成功.*跳过.*bad/);
+});
+
+test('自动回退：宿主把图片替换成文字要单独报（"模型实际不吃图"的铁证）', async () => {
+  const marker = `[${HOST_IMAGE_OMITTED_MARKER}; attachment sha256:deadbeef]`;
+  const llm = scriptedLlm((n) => (n === 'p/textonly' ? [delta(marker), FIN] : [delta('一张猫'), FIN]));
+  const r = await describeImageWithFallback({
+    llm, candidates: [{ provider: 'p', model: 'textonly' }, { provider: 'p', model: 'vision' }], attachment: ATT,
+  });
+  assert.equal(r.text, '一张猫');
+  assert.equal(r.attempts[0].reason, 'image-not-delivered',
+    '必须能认出宿主静默替换了图片，否则用户永远不知道为什么看图看不到图');
+  assert.match(describeAttempts(r.attempts), /实际不吃图/);
+});
+
+test('自动回退：某个候选抛错不阻断后面的候选，且宿主错误要带出来', async () => {
+  const llm = scriptedLlm((n) => {
+    if (n === 'p/boom') throw new Error('route exploded');
+    return [delta('看到了'), FIN];
+  });
+  const r = await describeImageWithFallback({
+    llm, candidates: [{ provider: 'p', model: 'boom' }, { provider: 'p', model: 'ok' }], attachment: ATT,
+  });
+  assert.equal(r.text, '看到了');
+  assert.equal(r.attempts[0].reason, 'call-failed');
+  assert.match(r.attempts[0].error, /route exploded/, '宿主错误不许吞掉');
+});
+
+test('自动回退：全部候选不可用时返回空 + 完整清单（绝不谎报成功）', async () => {
+  const r = await describeImageWithFallback({
+    llm: scriptedLlm(() => []),
+    candidates: [{ provider: 'p', model: 'a' }, { provider: 'p', model: 'b' }], attachment: ATT,
+  });
+  assert.equal(r.text, '');
+  assert.equal(r.attempts.length, 2);
+  assert.match(describeAttempts(r.attempts), /全部/);
 });
 
 test('isVisionModel 只认显式声明 image 的（缺字段不算）', () => {
