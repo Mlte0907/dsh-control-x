@@ -191,7 +191,10 @@ function Observe-Tree($win, $maxElements) {
         for ($i = $children.Count - 1; $i -ge 0; $i--) { $stack.Push(@($children[$i], $depth + 1)) }
     }
     $sw.Stop()
-    return @{ elements = @($elements); tree = ($lines -join "`n"); elapsedMs = $sw.ElapsedMilliseconds }
+    # 截断取证（2026-10-02 飞书任务教训）：循环因达到 maxElements 而停手时栈里还有
+    # 待展开的子树——不把这个事实报出去，「控件不存在」其实是「被截断没看到」。
+    $truncated = ($stack.Count -gt 0)
+    return @{ elements = @($elements); tree = ($lines -join "`n"); elapsedMs = $sw.ElapsedMilliseconds; truncated = $truncated }
 }
 
 # ── 命令分派 ──
@@ -204,7 +207,7 @@ try {
         'observe' {
             $win = Resolve-Window $req
             $c = $win.Current
-            $max = 200
+            $max = 400
             if ($null -ne $req.maxElements) { $max = [int]$req.maxElements }
             $procName = ''
             try { $procName = (Get-Process -Id $c.ProcessId -ErrorAction Stop).ProcessName } catch {}
@@ -214,6 +217,7 @@ try {
                 elements = $tree.elements
                 tree = $tree.tree
                 elapsedMs = $tree.elapsedMs
+                truncated = $tree.truncated
             }
         }
         'press' {
@@ -234,7 +238,9 @@ try {
             $vp = $null
             try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) } catch {}
             if ($null -eq $vp) {
-                throw [XControlException]::new('NOT_SETTABLE', "元素不支持 ValuePattern（通告：$((Get-PatternNames $el) -join ', ')）。")
+                # contenteditable（通告里只有 Text 等读写模式）没有 UIA 写入通道：给出可行路径而不是死路。
+                throw [XControlException]::new('NOT_SETTABLE', "元素不支持 ValuePattern（通告：$((Get-PatternNames $el) -join ', ')）。"
+                    + '富文本/contenteditable 输入框的写入通道是物理输入：x_desktop_type（Unicode）或剪贴板（Set-Clipboard 后 x_desktop_key ctrl+v）。')
             }
             $vp.SetValue([string]$req.value)
             $nc = $win.Current

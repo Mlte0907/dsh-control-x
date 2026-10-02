@@ -51,6 +51,12 @@ test('x_status 报的版本等于 package.json 的真实版本（防再写死）
   assert.match(value.version, /^\d+\.\d+\.\d+/, '版本形如 x.y.z，不允许再出现 0.0.1 这类占位值');
 });
 
+test('typeUnicode 拒绝代理对字符且不发生注入', { skip: process.platform !== 'win32' }, async () => {
+  const { typeUnicode } = await import('../lib/desktop/physical.js');
+  // 代理对在进入注入循环前就抛错——本测试因此不向真实键盘队列注入任何事件。
+  await assert.rejects(() => Promise.resolve().then(() => typeUnicode('😀')), /代理对/);
+});
+
 test('x_status 返回值通过宿主无损 JSON 快照规则（0.5.9 cfg 漏 getter 回归）', async (t) => {
   const { ctx, registered, dispose } = makeMockCtx();
   t.after(dispose);
