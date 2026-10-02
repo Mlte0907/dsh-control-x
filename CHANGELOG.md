@@ -1,5 +1,73 @@
 # 更新日志
 
+## 0.5.22（2026-10-03）
+
+**修复真机事故：`x_desktop_shot` 往 image block 里只塞了两个字段，导致截图此后一直读不回来。**
+
+### 是什么
+
+`lib/desktop/tools.js` 的 render 里，图片块被写成：
+
+```js
+blocks.push({ type: 'image', attachment: { attachmentId: v.image.attachmentId, mediaType: v.image.mediaType } });
+```
+
+而宿主 `ImageAttachmentRef` 的**五个字段全是必填**（`attachmentId` / `mediaType` / `bytes` /
+`width` / `height`，见 `dsh-agent-preset-registry` 的类型声明）。读回图片时宿主逐项比对实际字节：
+
+```js
+// dsh-attachment-local/lib/index.js:609
+metadata.mediaType !== ref.mediaType || data.byteLength !== ref.bytes
+  || metadata.width !== ref.width || metadata.height !== ref.height
+```
+
+缺字段就是 `undefined !== 738203`，于是抛
+`Stored attachment metadata does not match its reference.`（用户用 sharp 对着磁盘上的对象
+逐项比对验证过：残缺引用必然触发这条错误，补全引用即通过）。
+
+浏览器截图一直没这个毛病——`lib/browser/tools.js` 的 `renderTab` 传的是完整的
+`value.image`。**所以这个缺陷能长期藏在只有桌面截图才会踩的分支里。**
+
+### 为什么后果比"这次调用失败"严重
+
+那个 image block 会**留在会话上下文里**。此后每次重新组装请求（切模型、上下文压缩、续话）
+宿主都要重读这张图，于是一直崩——表现为「Agent 还没调用任何工具就失败」。
+豆包那次任务里 `x_desktop_shot` 被调了 5 次，之后两次切模型时就撞上了。
+
+### 我犯的两个错，都记下来
+
+**① 同一个错犯了两次。** 我先按「字节损坏」方向查（SHA256 其实与存放路径完全一致，
+是我第一次 PowerShell 比对写错了、node 复算才确认），又按「宿主把图片缩放后写错 ref」
+方向查（`verifyNormalizedImage` 有兜底，且写入的 `detectImage` 与读回的 `probeImage`
+调同一个 `imageMetadata`，必然一致）。**根因就在我自己的代码里，我绕着它查了两轮。**
+
+**② 我用"失败时没有工具被调用"这个证据下了错结论。** 那条证据本身是对的（失败确实发生在
+请求组装阶段），但我从中推出「所以不是我们插件的问题」——**我证了"何时失败"，没证"坏引用
+从哪来"**。这两件事之间隔着一个我没去查的环节。代价是让用户多做一次复现。
+
+### 修法
+
+- `attachment: { ...v.image }` —— **原样透传整个 image**，一个字段都不动。
+- 新增 `tests/image-ref-integrity.test.mjs`（3 条），做成**扫全部工具**而不是钉行号：
+  - 源码扫描：任何 `type: 'image'` 的 `attachment` 若显式列字段，必须覆盖全部五项；
+  - 运行时：真跑 `x_desktop_shot` 的 `render`，逐字段检查实际产出的 block，
+    并断言 JSON 文本块里同样完整（模型要据此回传给 `x_vision_describe`）。
+  写死行号的测试下一个人改个行号就失效，而**任何**工具只要开始输出图片都可能重犯——
+  那正是这个缺陷的形状。
+- **门的有效性已实测**：把事故那行注入回去，源码扫描与运行时两条都失败，且明确点名
+  `漏了 bytes/width/height`。恢复后全绿。
+
+### 顺带更正 0.5.21 的错误结论
+
+0.5.21 的条目把这个报错写成「宿主问题、插件只是路过」，并推测了「客户端缩放」「EXIF 方向」
+等方向。**那些推测全部作废**：坏引用是本插件自己造的，与缩放、方向、宿主读图路径都无关。
+
+另：0.5.21 里那批「附件错误分类」代码（`classifyVisionError` / `attachment-invalid` /
+提前中止）本身没错、也没走错分支，但**对这个事故完全没用**——事故发生在宿主重读我们
+早先留在上下文里的坏引用上，`x_vision_describe` 压根没被调用。它只是防御性代码。
+
+验证：`npm test` **147/147**（144 + 3）、`npm run verify:contract` **24/24**。
+
 ## 0.5.21（2026-10-03）
 
 **发布流程本身的静默失败：写完 CHANGELOG 却忘了改版本号。**（用户发现的）
