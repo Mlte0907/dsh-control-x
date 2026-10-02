@@ -1,8 +1,29 @@
 # 更新日志
 
-## 0.5.20（2026-10-03）
+## 0.5.21（2026-10-03）
 
-### 0.5.20b 真机复验撞上「Stored attachment metadata does not match its reference.」
+**发布流程本身的静默失败：写完 CHANGELOG 却忘了改版本号。**（用户发现的）
+
+0.5.20b 那次提交只改了代码与 CHANGELOG，`package.json` 与 `dsh-plugin.json` 都还写着
+`0.5.20`。而自更新的 `REF = 'main'`，直接读 main 上的 `package.json`，
+`compareVersions('0.5.20', '0.5.20')` 返回 0 → 面板显示**「已是最新」** →
+**附件那个修复永远送不到用户手上，且没有任何报错**。这与 0.5.5 插件市场静默卡住同一类，
+是本项目第二次栽在「发布状态不自洽」上。
+
+我用的 `0.5.20b` 这个写法还更糟：`compareVersions` 按 `-` 切分预发布后缀，
+`"0.5.20b"` 的 `core` 是 `"0.5.20b"`，`parseInt("20b")` 得 **20**，
+**字母后缀在这套版本比较里等于隐形**，照样和 0.5.20 相等。
+
+**修法**：正常递增到 0.5.21（不使用字母后缀），并加 `tests/release-hygiene.test.mjs`
+把这类疏漏变成测试失败：
+
+- `package.json` 与 `dsh-plugin.json` 版本必须一致；
+- CHANGELOG 最新一节标题必须等于 `package.json` 的版本；
+- 所有版本号必须是**纯数字点分**（`/^\d+(\.\d+)*$/`）——字母后缀一律拒绝，
+  因为它会在 `compareVersions` 里塌成同一个数字；
+- CHANGELOG 的版本序列必须**唯一且严格递减**（新版本在最前）。
+
+### 起因：0.5.20 真机复验撞上「Stored attachment metadata does not match its reference.」
 
 0.5.20 真机复验（用户把图片发进对话问「能识别到这张图么」，连试三次并在三种模型间切换）
 失败于宿主附件层。取证结论：
@@ -43,9 +64,9 @@ width / height）对不上，目前无法断言**。
 验证：`npm test` **139/139**（新增 3 条：错误分类、附件坏只试一次且摊开 claim、
 模型类错误仍继续回退）、`npm run verify:contract` **24/24**。
 
-### 0.5.20a 修复 `x_vision_describe` 在真实环境静默失效
+## 0.5.20（2026-10-03）
 
-**修复 `x_vision_describe` 在真实环境静默失效。**
+### 修复 `x_vision_describe` 在真实环境静默失效
 
 ### 怎么发现的
 
