@@ -473,3 +473,22 @@ test('watch 路由：GET /update 与 POST /update 转发到控制器，缺控制
   const off = JSON.parse(res.body);
   assert.equal(off.available, false, '没有控制器时不能说"已是最新"');
 });
+
+test('作业控制器：快照带 runningVersion，例行检查不冲掉它（重启提醒的依据）', async () => {
+  const { pkgRoot, cleanup } = makeProfile();
+  try {
+    const fetchImpl = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ version: '0.5.9' }) });
+    const ctl = createUpdateController({ pkgRoot, fetchImpl, runningVersion: '0.5.9' });
+    await ctl.check();
+    const snap = ctl.snapshot();
+    assert.equal(snap.runningVersion, '0.5.9', '快照必须带内存里正在运行的版本');
+    assert.equal(snap.current, '0.5.5', 'current 仍读磁盘（profile 假包的版本）');
+    // 换装后磁盘 current 会变成新版本：runningVersion !== current 即「待重启」，
+    // 这个差值例行检查也冲不掉——客户端的 done 提醒靠它，不能靠 status==='done' 分支。
+    const before = ctl.snapshot();
+    await ctl.check({ force: true });
+    assert.equal(ctl.snapshot().runningVersion, before.runningVersion, '检查不得清掉 runningVersion');
+  } finally {
+    cleanup();
+  }
+});

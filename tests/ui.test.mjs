@@ -316,3 +316,53 @@ test('设置页自带版本与更新：打开即检查，有新版才给更新�
   // 版本号要显示出来（用户明确要求"加一个版本号"）。
   assert.match(src, /title:\s*"当前版本"/);
 });
+
+test('resolveUpdateView：全分支状态机（含重启提醒不被例行检查冲掉的回归）', async () => {
+  const handlers = new Map();
+  globalThis.window = {
+    __ModuleLoader__: { load(spec) { handlers.set(spec.id, spec.factory); } },
+  };
+  // client.js 在本文件首个用例里已被 import 过；带 query 换一个模块实例，让 __ModuleLoader__ 重新装载
+  await import(new URL('../lib/client.js?view-state-machine', import.meta.url).href);
+  const exports = handlers.get('dsh-control-x')((name) => (name === 'react' ? { createElement: () => ({}) } : {}));
+  const view = exports.__ui.resolveUpdateView;
+  assert.equal(typeof view, 'function', '视图状态机应经 __ui 导出');
+
+  // 服务不可用
+  assert.equal(view({ available: false, error: 'x' }).kind, 'unavailable');
+  // 手动检查进行中：按钮要有反馈且禁用（0.5.11 及之前"点了没反应"）
+  const checking = view({ checking: true, checkedAt: 1 });
+  assert.equal(checking.kind, 'checking');
+  assert.equal(checking.button.disabled, true);
+  // 服务端 busy：检查阶段与换装阶段的按钮文案要分开，不能都叫"更新中…"
+  assert.match(view({ busy: true, status: 'checking' }).button.label, /检查中/);
+  assert.match(view({ busy: true, status: 'working', stage: '正在下载新版本…' }).text, /正在下载/);
+  assert.match(view({ busy: true, status: 'working' }).button.label, /更新中/);
+
+  // 核心回归：换装待重启由 runningVersion !== current 推导。
+  // 旧实现靠 status==='done'，60s 后例行检查把 status 冲回 idle，提醒就丢了。
+  const done = view({
+    runningVersion: '0.5.11', current: '0.5.12',
+    status: 'idle', checkedAt: Date.now(), updateAvailable: false,
+    result: { backupDir: 'D:\cx-backups\dsh-control-x-0.5.11-x' },
+  });
+  assert.equal(done.kind, 'done', '例行检查后仍要显示待重启');
+  assert.match(done.text, /已换装 0\.5\.12/);
+  assert.match(done.text, /备份在/);
+  // 换装待重启优先于失败分支：检查失败也不许把重启提醒顶掉
+  assert.equal(view({ runningVersion: '0.5.11', current: '0.5.12', failedPhase: 'check', error: 'x' }).kind, 'done');
+  // 重启之后运行版本追上磁盘版本，提醒自然消失
+  assert.equal(view({ runningVersion: '0.5.12', current: '0.5.12', checkedAt: 1, latest: '0.5.12' }).kind, 'latest');
+
+  // 失败与可用分支
+  assert.match(view({ failedPhase: 'apply', error: 'EPERM' }).text, /更新失败/);
+  assert.equal(view({ failedPhase: 'apply', error: 'x' }).button.label, '重试更新');
+  assert.match(view({ failedPhase: 'check', error: 'ENOTFOUND' }).text, /检查失败/);
+  const avail = view({ updateAvailable: true, latest: '0.5.12', runningVersion: '0.5.11' });
+  assert.equal(avail.kind, 'available');
+  assert.equal(avail.button.primary, true, '有新版时才是主按钮');
+  assert.equal(avail.button.label, '更新到 0.5.12');
+  assert.match(view({ updateAvailable: true, latest: '0.5.12', runningVersion: '0.5.11' }).text, /当前运行 0\.5\.11/);
+  // 首屏（没检查过）：只说正在检查，不给按钮
+  assert.deepEqual(view({}), { kind: 'initial', text: '正在检查…', button: null });
+});
