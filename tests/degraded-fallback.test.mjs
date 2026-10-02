@@ -364,11 +364,21 @@ test('skill 不得让模型为「已经看到的截图」再多绕一次调用',
   // 后面，等于在教模型多花一次模型调用去换一个它已经能看到的东西。
   const { CONTROL_X_SKILL } = await import('../lib/skill.js');
   const c = CONTROL_X_SKILL.content;
-  const line = c.split('\n').find((l) => l.includes('x_desktop_shot') && l.includes('x_vision_describe'))
-    ?? c.slice(Math.max(0, c.indexOf('x_desktop_shot') - 400), c.indexOf('x_desktop_shot') + 600);
-  assert.match(line + c.slice(0, 400),
-    /已经看得到|直接看|不需要再调/,
+  assert.match(c, /已经看得到|直接看图|不需要再调/,
     'skill 必须明确告诉模型：x_desktop_shot 的图片块已在上下文里，直接看');
   assert.match(c, /最后手段|只吃文本/,
     'x_vision_describe 必须被降级为「会话模型确实只吃文本时」的最后手段');
+});
+
+test('skill 不得写「网页任务一律走浏览器」——那会让「打开XX」一律开成网页', async () => {
+  // 2026-10-03 真实走错：用户说「打开豆包」，Agent 按优先级阶梯里那句「网页任务一律在此层」
+  // 直接去了 doubao.com，撞上登录拦截；用户说明「桌面豆包是正常登录态」才切回桌面端。
+  const { CONTROL_X_SKILL } = await import('../lib/skill.js');
+  const c = CONTROL_X_SKILL.content;
+  assert.doesNotMatch(c, /网页任务一律/,
+    '「一律」把「打开XX」这类不分网页/桌面的指令一律导向网页，必须改掉');
+  assert.match(c, /先桌面后网页|先查桌面/,
+    'skill 必须给出「先查桌面端」的明确顺序');
+  assert.match(c, /人机识别|验证码/,
+    '必须写明无头浏览器在登录/扫码/人机识别场景下必然失败，且要换桌面端而不是重试');
 });
