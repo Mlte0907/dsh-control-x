@@ -257,8 +257,8 @@ try {
             try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) } catch {}
             if ($null -eq $vp) {
                 # contenteditable（通告里只有 Text 等读写模式）没有 UIA 写入通道：给出可行路径而不是死路。
-                throw [XControlException]::new('NOT_SETTABLE', "元素不支持 ValuePattern（通告：$((Get-PatternNames $el) -join ', ')）。"
-                    + '富文本/contenteditable 输入框的写入通道是物理输入：x_desktop_type（Unicode）或剪贴板（Set-Clipboard 后 x_desktop_key ctrl+v）。')
+                # 注意 throw 必须单行：PS 5.1 方法调用参数列表内换行 = 参数列表结束（0.5.14 血泪，parse-guard 测试钉死）。
+                throw [XControlException]::new('NOT_SETTABLE', "元素不支持 ValuePattern（通告：$((Get-PatternNames $el) -join ', ')）。富文本/contenteditable 输入框的写入通道是物理输入：x_desktop_type（Unicode）或剪贴板（Set-Clipboard 后 x_desktop_key ctrl+v）。")
             }
             $vp.SetValue([string]$req.value)
             $nc = $win.Current
