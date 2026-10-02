@@ -1,5 +1,118 @@
 # 更新日志
 
+## 0.5.18（2026-10-02）
+
+代码审查修复批次。起因是一次全量审查，参考了五个同类项目
+（ZCode `browser-use` 0.5.1 / `computer-use` 0.6.3、`Fisfzy/dsh-ego-browser`、
+`988hj7tczd-oss/dsh-computer-use`、`Anionex/dsh-computer-use`）。
+99 → 115 个单测，新增 16 条。
+
+### 修复 1（高危）：面板 HTTP 接口完全没有鉴权
+
+**证据**：对运行中的宿主打同一个跨站请求（`Origin: https://evil.example`）：
+
+```
+GET /api                     → 403   ← 宿主自己的接口，拒
+GET /api/x-control/config    → 200   ← 插件的接口，放行
+```
+
+**根因**：`dsh-host-webserver` 的分发是纯 `match(pathname) → route.handler`
+（app.asar 内 `lib/index.js:229-245`），**webserver 层没有任何全局栅栏**——它自己的
+README 明写"不提供内建 TLS 或应用层鉴权"，且启动时直接拒绝 `--host 0.0.0.0`，理由是
+"会把 RCE 暴露到网络上"。宿主自己的 Host/Origin 三重校验 + 浏览器会话认证
+（`isTrustedApiRequest` / `browserAuth.isAuthenticated`）只作用在 `dsh-client-connection`
+注册的那条 `/api` 路由上。插件用 `webServer.register({kind:'prefix'})` 注册的是
+**第二条独立路由**，完全落在那道栅栏之外。
+
+而这条路上挂着有副作用的端点：`POST /update`（下载并安装新版本）、`POST /host-accessibility`
+（改宿主启动快捷方式）、`POST /clear-data`（清 Cookie 与本地数据）、`POST /input`（点击打字）、
+`POST /login-window`（拉起有头浏览器窗口）、`POST /config`。**审查期间实测触发过其中三项，
+均已回滚并核验**（快捷方式的旗标已移除、浏览器已回无头、临时写的配置文件已删）。
+
+**修复**：照抄参照实现 `Fisfzy/dsh-ego-browser`（同代、同宿主、同架构里唯一也注册
+webServer 路由的）的做法，补三层冗余栅栏 + 请求体上限：
+
+1. **Host 必须回环** —— 杀 DNS rebinding（webserver 只绑 127.0.0.1，但 rebinding 请求的
+   Host 头是攻击者域名，所以这条一票否决）；
+2. **POST 的 Origin（若存在）必须等于 Host** —— 杀跨站（按 Fetch 规范浏览器对 GET/HEAD
+   之外的请求一定带 Origin，所以跨站 POST 必被拒；缺席 Origin 时不拒，那是 curl / 验收
+   脚本这类非浏览器客户端，仍须过第 1、3 条）；
+3. **POST 必须是 `application/json`** —— 它不是 CORS 安全列表类型，跨域使用会触发预检，
+   而插件不返回任何 CORS 头，预检必然失败，请求**根本发不出去**（封掉 `text/plain` +
+   `mode:'no-cors'` 那条绕过路径）；
+4. `readBody` 加 64KB 硬上限 —— 此前是无上限拼接，任意本地页面都能把宿主内存吃光。
+
+**刻意不校验宿主会话 cookie**（ego-browser 的 `guardHandler` 做法）：该 cookie 由宿主
+`browserAuth` 在 index 请求时才种下，是否已种取决于宿主启动路径，拿它当硬门有可能在某些
+部署下直接把面板锁死；上面三条对"远程网页"这个真实威胁模型已经闭合。
+
+新增 `tests/watch-guard.test.mjs`（6 条）：逐条覆盖三个分支，端到端断言恶意请求打不动
+任何副作用端点（`m.calls` 必须为空），以及同源合法客户端照常可用。
+
+### 修复 2：两个"文档写着能用、实际必然失败"的功能
+
+- **`x_desktop_type` / `x_desktop_key` 省略可选的 `element`**：此前用 `args.element ?? 0`
+  去查元素，而观察树里**不存在编号 0**——`uia-helper.ps1` 的 `Observe-Tree` 第一轮
+  `if ($index -gt 0)` 把窗口自身排除在 `elements` 之外（真机实测返回编号 1..11）。
+  于是不传 `element` 必然撞 `ELEMENT_UNAVAILABLE: 元素 #0 不在观察快照…请重新观察；不要猜编号`
+  ——一条把参数默认值取错、却把模型引向"再观察一遍"的误导性报错。
+  参照实现 `988hj7tczd-oss/dsh-computer-use` 的 `guard.js:64` 在 `element` 缺席时**跳过**
+  元素级检查，而不是拿 0 去顶。现在改为：新方法 `DesktopManager.windowOf()`（只取快照里的
+  窗口），且因为没有元素就**无法核对目标名称**，返回文案如实写明"危险词检查已跳过"。
+- **`x_vision_describe` 的 `tab_id` 捷径**：工具描述宣传"或直接给 tab_id 让本工具现拍一张"，
+  但调用 `browserManager.shot(id, {})` 漏传 `attachments`，而 `manager.shot()` 拿不到它就
+  直接抛「当前环境未挂载 attachments 服务」——捷径必然失败，且报错完全指错了方向。
+
+### 修复 3：「全权操控」开关改了必须重载插件才生效
+
+`lib/desktop/tools.js` 在 `buildDesktopTools` 里 `const trustPhysicalInput = cfg.trustPhysicalInput === true;`
+把它快照成常量，而同文件所有其他设置都是实时 getter。用户在设置页打开开关后，工具仍在
+请求审批（实测 `PERMISSION_DENIED`，而 `cfg.trustPhysicalInput` 确实已读到 `true`）。
+改为在 `guardPhysical` 里现读。同类回归已在 `tests/banner-win.test.mjs` 钉住。
+
+### 修复 4：自更新下载不再拉会移动的分支名
+
+`applyUpdate` 此前用 `downloadTarball({ ref })` 直接拉 `tar.gz/main`——一个会移动的引用，
+而 `resolveSha()` 本来就在同一函数里（只拿去写锁文件），于是"检查时看到的版本"与
+"随后下载到的字节"之间存在一次真实竞态。现在下载**前**先把 ref 钉成 40 位 commit sha，
+下载与写锁文件共用同一个 sha；**取不到 sha 时如实失败，不降级去拉分支名**（降级等于把刚
+消除的竞态请回来，而"降级"看起来像成功更糟）。
+
+仍存留的已知局限（如实记录）：下载的 tarball **没有做哈希或签名校验**。首次安装信任
+GitHub 与用户的网络；TOFU 类防护只能覆盖后续更新。
+
+### 修复 5：成功换装泄漏临时目录
+
+`extractTarball` 此前**只在 catch 里** `rmSync`，成功路径直接泄漏——每次成功更新都在
+`%TEMP%` 留一份完整的解包副本（本机实测累计 68 个目录 / 11.7 MB，且每份都是一份可执行的
+插件代码）。现在 `cleanup()` 由调用方在 `finally` 里执行。已实测清空本机那 68 个残留
+（删除后归零），并加两条测试（成功路径 + 失败路径都必须归零）。
+这个插件在另外两处对同一类泄漏都有专门的回归记录（`banner-win.js` 的临时目录、
+`host-contract-verify.mjs` 的 pkgRoot），updater 这处漏了。
+
+### 清理与一致性
+
+- **删除死代码**：`GET/POST /config` 路由与 `fileOverrides` 配置层。它们**永远不可达**——
+  cordis 的 `resolveConfig` 会把每个声明字段都填成 volatile Ref，于是 `pick()` 的
+  `fileOverrides` 分支走不到（用宿主真 schemastery+cordis 实测：文件里 `headless=false`、
+  `ttlMs=1234`，宿主配置是默认值时 `pick()` 仍返回 `true`/`30000`）。而设置页实际走宿主
+  `configForms`，从来不碰那个文件。留着等于一个无鉴权、可写任意键的写入口
+  （`POST /config` 那条还自己读 body、不受上限约束）。README 里"热保存到 config.json"
+  的说法同步改正。
+- `x_status` 补上 `browserIdleMs`：`outputSchema` 声明了它，`execute` 却一直没返回
+  （与 0.5.9 那次 `bannerIdleExitMs` 漏 getter 同类漂移，方向相反：那次是"返回值有、schema 无"）。
+- `x_browser_tabs` 的描述改正：它**不会**启动浏览器（此前写"首次浏览器工具调用才会拉起"）。
+- skill 文案同步：物理输入门控写清「全权操控」开关开启后不再逐次审批，并注明 Windows 物理
+  输入是**全局**注入（无 macOS 那种 per-pid 通道），会与用户真实光标争用。
+- README：`verify:contract` 的工具数 21 → 22。
+
+### 撤回一条审查结论
+
+审查中曾报"updater 删除 `integrity` 的正则永不生效"。**该结论错误，已撤回**：当时构造的
+fixture 用了块映射 `integrity:` 作末键，而 pnpm 对 git-hosted tarball 依赖产生的是
+`resolution: {gitHosted: true, integrity: X, tarball: Y}` 这一形状，正则要求尾随 `", "`
+恰好匹配。用真实形状复测：旧 integrity 确实被删除，`tests/updater.test.mjs` 本就断言了这一点。
+
 ## 0.5.17（2026-10-02）
 
 **修复：DeepSeek 官方 API 模型下整会话 HTTP 400——三个无参工具的入参根缺 `type: "object"`。**

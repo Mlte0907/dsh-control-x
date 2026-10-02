@@ -138,10 +138,17 @@ function makeProfile({ version = '0.5.5' } = {}) {
   return { root, pkgRoot, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-/** 只回 tarball 的 fetch；GitHub API 那条单独答。 */
-function tarballFetch(tarball, { sha = NEW_SHA } = {}) {
-  return async (url) => {
-    if (url.includes('api.github.com')) {
+/**
+ * 只回 tarball 的 fetch；GitHub API 那条单独答。
+ *
+ * 记录每次请求的 URL，供"下载必须钉在 commit sha 上"那条回归断言用。
+ */
+function tarballFetch(tarball, { sha = NEW_SHA, apiFails = false } = {}) {
+  const urls = [];
+  const impl = async (url) => {
+    urls.push(String(url));
+    if (String(url).includes('api.github.com')) {
+      if (apiFails) return { ok: false, status: 403, text: async () => 'rate limited' };
       return { ok: true, status: 200, text: async () => JSON.stringify({ sha }) };
     }
     return {
@@ -150,6 +157,8 @@ function tarballFetch(tarball, { sha = NEW_SHA } = {}) {
       arrayBuffer: async () => new Uint8Array(tarball).buffer,
     };
   };
+  impl.urls = urls;
+  return impl;
 }
 
 test('版本比较：点分数字、位数不齐、预发布', () => {
@@ -356,6 +365,66 @@ test('换装：远端不比本地新就拒绝，不做任何写入', async () =>
   }
 });
 
+test('换装：下载必须钉在 commit sha 上，不能拉会移动的分支名', async () => {
+  const { pkgRoot, cleanup } = makeProfile();
+  try {
+    const fetchImpl = tarballFetch(newPackageTarball('0.5.7'));
+    await applyUpdate({ pkgRoot, fetchImpl });
+    const tarballCalls = fetchImpl.urls.filter((u) => u.includes('codeload.github.com'));
+    assert.equal(tarballCalls.length, 1);
+    // 此前是 tarballUrl(repo, ref) 直接拉 `tar.gz/main`——一个会移动的引用。
+    // 而 resolveSha() 本来就在流程里（只拿去写锁文件），于是"检查时看到的版本"与
+    // "随后下载到的字节"之间存在一次真实竞态。现在下载与写锁文件用同一个 sha。
+    assert.ok(
+      tarballCalls[0].endsWith(`/${NEW_SHA}`),
+      `下载 URL 必须以 40 位 commit sha 结尾，实际是 ${tarballCalls[0]}`,
+    );
+    assert.doesNotMatch(tarballCalls[0], /tar\.gz\/main$/, '不得拉分支名');
+  } finally {
+    cleanup();
+  }
+});
+
+test('换装：取不到 commit sha 时如实失败，不降级去拉分支名', async () => {
+  const { root, pkgRoot, cleanup } = makeProfile();
+  try {
+    const before = readFileSync(join(root, 'package.json'), 'utf8');
+    await assert.rejects(
+      applyUpdate({ pkgRoot, fetchImpl: tarballFetch(newPackageTarball('0.5.7'), { apiFails: true }) }),
+      /无法确定 .*commit sha[\s\S]*放弃更新/,
+      'GitHub API 不可用时必须失败，不能悄悄退化成"拉分支名"',
+    );
+    assert.equal(installedVersion(pkgRoot), '0.5.5', '盘上必须还是原版本');
+    assert.equal(readFileSync(join(root, 'package.json'), 'utf8'), before, 'profile 文件一个字节都不该动');
+  } finally {
+    cleanup();
+  }
+});
+
+test('换装：成功后不留下 cx-update-* 临时目录（此前每次成功都泄漏一份代码副本）', async () => {
+  const count = () => readdirSync(tmpdir()).filter((n) => n.startsWith('cx-update-')).length;
+  const { pkgRoot, cleanup } = makeProfile();
+  const before = count();
+  try {
+    await applyUpdate({ pkgRoot, fetchImpl: tarballFetch(newPackageTarball('0.5.7')) });
+    assert.equal(count(), before, `成功的换装不得留下临时目录（泄漏了解包出来的完整代码副本）`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('换装：失败路径同样不留临时目录（版本不新就中止）', async () => {
+  const count = () => readdirSync(tmpdir()).filter((n) => n.startsWith('cx-update-')).length;
+  const { pkgRoot, cleanup } = makeProfile();
+  const before = count();
+  try {
+    await assert.rejects(applyUpdate({ pkgRoot, fetchImpl: tarballFetch(newPackageTarball('0.5.4')) }));
+    assert.equal(count(), before, '失败路径也要清理');
+  } finally {
+    cleanup();
+  }
+});
+
 test('syncProfileSources：锁文件里找不到本插件条目时如实报警告，不硬改', () => {
   const root = mkdtempSync(join(tmpdir(), 'cx-upd-'));
   try {
@@ -438,39 +507,28 @@ test('watch 路由：GET /update 与 POST /update 转发到控制器，缺控制
     check: async ({ force }) => { calls.push(['check', force]); return updater.snapshot(); },
     startApply: () => { calls.push(['apply']); return { status: 'working', busy: true }; },
   };
-  const ws = new WatchServer({}, () => {}, null, null, null, updater);
+  const { callRoute } = await import('./helpers.mjs');
+  // WatchServer(manager, activity, listVisionModels, banner, updater, hostAccessibility)
+  const ws = new WatchServer({}, null, null, null, updater);
   let route = null;
   ws.attach({ register: (r) => { route = r; } });
-  function fakeRes() {
-    return { headersSent: false, status: 0, body: '', writeHead(s) { this.status = s; }, end(b) { this.body = b; } };
-  }
-  async function request(method, path, body) {
-    const res = fakeRes();
-    const payload = body === undefined ? '' : JSON.stringify(body);
-    await route.handler({
-      method, url: 'http://local/api/x-control' + path, on() {},
-      async *[Symbol.asyncIterator]() { if (payload) yield payload; },
-    }, res);
-    return res;
-  }
+  const request = (method, path, body) => callRoute(route, method, path, body);
 
-  const got = JSON.parse((await request('GET', '/update')).body);
+  const got = (await request('GET', '/update')).json;
   assert.equal(got.available, true);
   assert.equal(got.updateAvailable, true);
   await request('POST', '/update', { action: 'check' });
   await request('POST', '/update', { action: 'check', force: true });
-  const applied = JSON.parse((await request('POST', '/update', { action: 'apply' })).body);
+  const applied = (await request('POST', '/update', { action: 'apply' })).json;
   assert.equal(applied.busy, true, 'apply 立即返回 busy，由客户端轮询');
   assert.deepEqual(calls, [['check', false], ['check', true], ['apply']]);
-  const bad = JSON.parse((await request('POST', '/update', { action: 'nope' })).body);
+  const bad = (await request('POST', '/update', { action: 'nope' })).json;
   assert.match(bad.error, /check 或 apply/);
 
   const bare = new WatchServer({});
   let route2 = null;
   bare.attach({ register: (r) => { route2 = r; } });
-  const res = fakeRes();
-  await route2.handler({ method: 'GET', url: 'http://local/api/x-control/update', on() {} }, res);
-  const off = JSON.parse(res.body);
+  const off = (await callRoute(route2, 'GET', '/update')).json;
   assert.equal(off.available, false, '没有控制器时不能说"已是最新"');
 });
 

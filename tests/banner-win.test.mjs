@@ -186,7 +186,9 @@ test('物理输入门控：confirm_disturbance 以前收了却从不看（真 bu
   for (const tool of ['x_desktop_mouse_click', 'x_desktop_type', 'x_desktop_key']) {
     assert.match(
       src,
-      new RegExp(`guardPhysical\\(exec, '${tool}', el\\.name, args\\.confirm_disturbance\\)`),
+      // x_desktop_type / x_desktop_key 的 element 是可选的（2026-10-02 修），没有元素时
+      // label 只能是 undefined，所以这两处传 el?.name 而非 el.name——但 confirm 照样必须传。
+      new RegExp(`guardPhysical\\(exec, '${tool}', el(?:\\?|)\\.name, args\\.confirm_disturbance\\)`),
       `${tool} 必须把 confirm_disturbance 传进门控`,
     );
   }
@@ -196,7 +198,13 @@ test('物理输入门控：confirm_disturbance 以前收了却从不看（真 bu
   const confirmAt = src.indexOf('if (confirm === true)');
   assert.ok(unavail > 0, '应存在 unavailable 分支');
   assert.ok(confirmAt > unavail, 'confirm 的判断必须落在 unavailable 分支之后');
-  assert.match(src, /if \(trustPhysicalInput\) \{/, '「全权操控」开关必须真的被读');
+  // 「全权操控」必须现读 cfg，而不是在 buildDesktopTools 里快照成常量
+  // （2026-10-02 修：快照导致设置页改了开关必须重载插件才生效）。
+  assert.match(src, /if \(cfg\.trustPhysicalInput === true\)/, '「全权操控」开关必须现读 cfg');
+  // 用"去掉注释再匹配"的方式断言没有快照常量：源码注释里为了讲清这个回归，
+  // 反而保留了 `const trustPhysicalInput = cfg.trustPhysicalInput === true;` 这行原文。
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(code, /const trustPhysicalInput =/, '不得把开关快照成常量（注释除外）');
 });
 
 test('浮窗脚本不含 CJK 字面量（Windows PowerShell 无 BOM 按 ANSI 解码会解析失败）', () => {

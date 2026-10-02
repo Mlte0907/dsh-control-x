@@ -68,36 +68,25 @@ test('watch 路由：GET/POST /host-accessibility 转发控制器，缺控制器
     detect: async () => { calls.push('detect'); return { ok: true, shortcuts: [{ path: 'a.lnk', patched: true }], errors: [] }; },
     set: async (enabled) => { calls.push(`set:${enabled}`); return { ok: true, shortcuts: [], errors: [] }; },
   };
-  const ws = new WatchServer({}, () => {}, null, null, null, null, fake);
+  const { callRoute } = await import('./helpers.mjs');
+  // WatchServer(manager, activity, listVisionModels, banner, updater, hostAccessibility)
+  const ws = new WatchServer({}, null, null, null, null, fake);
   let route = null;
   ws.attach({ register: (r) => { route = r; } });
-  function fakeRes() {
-    return { headersSent: false, status: 0, body: '', writeHead(s) { this.status = s; }, end(b) { this.body = b; } };
-  }
-  async function request(method, path, body) {
-    const res = fakeRes();
-    const payload = body === undefined ? '' : JSON.stringify(body);
-    await route.handler({
-      method, url: 'http://local/api/x-control' + path, on() {},
-      async *[Symbol.asyncIterator]() { if (payload) yield payload; },
-    }, res);
-    return res;
-  }
+  const request = (method, path, body) => callRoute(route, method, path, body);
 
-  const got = JSON.parse((await request('GET', '/host-accessibility')).body);
+  const got = (await request('GET', '/host-accessibility')).json;
   assert.equal(got.available, true);
   assert.equal(got.shortcuts.length, 1);
   await request('POST', '/host-accessibility', { enabled: true });
   await request('POST', '/host-accessibility', { enabled: false });
-  const bad = JSON.parse((await request('POST', '/host-accessibility', { enabled: 'yes' })).body);
+  const bad = (await request('POST', '/host-accessibility', { enabled: 'yes' })).json;
   assert.equal(bad.error !== undefined, true, '非布尔 enabled 报错');
 
   const bare = new WatchServer({});
   let route2 = null;
   bare.attach({ register: (r) => { route2 = r; } });
-  const res = fakeRes();
-  await route2.handler({ method: 'GET', url: 'http://local/api/x-control/host-accessibility', on() {} }, res);
-  const off = JSON.parse(res.body);
+  const off = (await callRoute(route2, 'GET', '/host-accessibility')).json;
   assert.equal(off.available, false, '缺控制器时不能假装可用');
   assert.deepEqual(calls, ['detect', 'set:true', 'set:false']);
 });

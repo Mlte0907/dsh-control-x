@@ -76,11 +76,22 @@ dsh --profile <你的profile名> \
 
 ## 状态
 
+**v0.5.18（2026-10-02）**：**修复面板 HTTP 接口无鉴权的高危缺陷**——`/api/x-control/*`
+注册在宿主 webServer 上，而 webserver 自身不做任何鉴权（宿主 README 明写"不提供内建
+TLS 或应用层鉴权"），宿主自己的 Host/Origin 栅栏只作用在它那条 `/api` 路由上。
+实测同一个跨站请求：宿主接口 403、插件接口 200，而这条路上挂着 `POST /update`
+（下载安装新版本）、`POST /host-accessibility`（改宿主启动快捷方式）等有副作用的端点。
+现在按参照实现 `Fisfzy/dsh-ego-browser` 补了三层栅栏（Host 必须回环 / POST 的 Origin
+必须同源 / POST 必须 application/json）+ 请求体上限。同期修掉两个"文档写着能用、
+实际必然失败"的功能（`x_desktop_type`/`x_desktop_key` 省略可选 `element`、`x_vision_describe`
+的 `tab_id` 捷径）、「全权操控」开关改了要重载才生效、自更新下载不再钉 commit sha、
+以及成功换装泄漏临时目录（原 68 个 / 11.7 MB）。见 [CHANGELOG.md](CHANGELOG.md)。
+
 **v0.3.1（2026-10-01）**：**修复 21 个工具全部注册失败且用户侧无感知的致命缺陷**
 （`output.schema` 误用 property-map 方言，被宿主 `assertSupportedJsonSchema` 全数拒收，
 而 `safeRegister` 吞异常只写日志）。修复走注册边界统一规范化 + 新增宿主契约测试与
-`npm run verify:contract`（直接抽宿主真校验器判 21 个工具）。18/18 单测、
-21/21 真宿主契约、m1/m2/m3 与 selfcheck 全绿。详见 [CHANGELOG.md](CHANGELOG.md)。
+`npm run verify:contract`（直接抽宿主真校验器判工具）。18/18 单测、
+真宿主契约全绿、m1/m2/m3 与 selfcheck 全绿。详见 [CHANGELOG.md](CHANGELOG.md)。
 
 **v0.3.0（2026-10-01）**：面板全面对齐 ZCode——同款 lucide 图标工具栏（后退/前进/刷新/
 **自由尺寸**/**元素选择**/⋯菜单）、尺寸栏（W×H + 50%~200% 缩放）、标签 chip 关闭、
@@ -90,7 +101,7 @@ dsh --profile <你的profile名> \
 
 UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 浏览器路径 / 快照 TTL /
 桌面白名单 / 物理输入空闲阈值 / 忽略证书校验 / 浏览器空闲回收 / 三个总开关，热保存到
-`~/.dsh/cache/dsh-control-x/config.json`）+ **右侧栏「X-Agent浏览器」**（CDP JPEG 实时画面、
+走宿主 `configForms` 热保存）+ **右侧栏「X-Agent浏览器」**（CDP JPEG 实时画面、
 地址栏与前进后退刷新、外部打开、清除数据；点击/滚轮/按键回传到无头浏览器，不影响你的桌面）
 + 会话输入框的 **X-Agent** 按钮。
 
@@ -111,7 +122,7 @@ UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 
 ```sh
 npm install            # 依赖（schemastery / playwright-core / koffi）
 npm test               # 宿主外冒烟测试（node --test）
-npm run verify:contract # 宿主契约验收（抽 app.asar 内真校验器判 21 个工具）
+npm run verify:contract # 宿主契约验收（抽 app.asar 内真校验器判 22 个工具）
 npm run verify:m1      # 浏览器控制面闭环验收（真实联网）
 npm run verify:m2      # 桌面语义控制闭环验收（启动 charmap 并清理）
 npm run verify:m3      # 门控 + skill + 物理输入闭环验收

@@ -196,8 +196,9 @@ test('工具栏对齐 ZCode：同款 lucide 图标 + 自由尺寸/元素选择/�
   assert.match(src, /conversation\.input\.overlay/, '注释里保留 overlay 槽位的坑位说明');
 });
 
-test('watch 路由：GET /tabs 与 GET /config', async () => {
+test('watch 路由：GET /tabs 与 GET /config 已下线（死代码，见 watch.js 注释）', async () => {
   const { WatchServer } = await import('../lib/browser/watch.js');
+  const { callRoute } = await import('./helpers.mjs');
   const fakeManager = {
     listTabs: () => [{ id: 't1', url: 'https://x/', title: 'X' }],
     get: () => ({ url: () => 'https://x/' }),
@@ -220,25 +221,17 @@ test('watch 路由：GET /tabs 与 GET /config', async () => {
   ws.attach({ register: (r) => { route = r; } });
   assert.equal(route.kind, 'prefix');
   assert.equal(route.path, '/api/x-control');
-  function fakeRes() {
-    return { headersSent: false, status: 0, body: '', writeHead(s) { this.status = s; }, end(b) { this.body = b; } };
-  }
   async function request(method, path, body) {
-    const res = fakeRes();
-    const payload = body === undefined ? '' : JSON.stringify(body);
-    const req = {
-      method,
-      url: 'http://local/api/x-control' + path,
-      on() {},
-      async *[Symbol.asyncIterator]() { if (payload) yield payload; },
-    };
-    await route.handler(req, res);
-    return res;
+    return callRoute(route, method, path, body);
   }
   const res1 = await request('GET', '/tabs');
   assert.deepEqual(JSON.parse(res1.body), { tabs: [{ id: 't1', url: 'https://x/', title: 'X' }], loginActive: false });
+  // /config 曾是读 ~/.dsh/cache/dsh-control-x/config.json 的死路由（那个文件永远不会被
+  // 写入、也永远不会被读取，见 lib/index.js apply() 注释），2026-10-02 下线。
   const res2 = await request('GET', '/config');
-  assert.equal(res2.status, 200);
+  assert.equal(res2.status, 404, '死路由 /config 必须真的没了，而不是留一个无鉴权写入口');
+  const res2b = await request('POST', '/config', { browserEnabled: false });
+  assert.equal(res2b.status, 404);
   // 地址栏导航：有 tab 原地跳，无 tab 新开
   const nav1 = JSON.parse((await request('POST', '/navigate', { tab: 't1', url: 'https://y/' })).body);
   assert.equal(nav1.ok, true);

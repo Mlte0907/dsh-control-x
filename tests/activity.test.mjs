@@ -98,18 +98,13 @@ test('withActivity：filter 之外的工具不计入（浏览器面不该触发�
 });
 
 test('GET /activity 返回活动快照；无 tracker 时如实报不可用而不是假装空闲', async () => {
+  const { callRoute } = await import('./helpers.mjs');
   const act = createActivityTracker();
   act.begin('x_desktop_tree');
   let route = null;
-  new WatchServer({ listTabs: () => [] }, undefined, act).attach({ register: (r) => { route = r; } });
+  new WatchServer({ listTabs: () => [] }, act).attach({ register: (r) => { route = r; } });
 
-  async function get(path) {
-    const res = { status: 0, body: '', writeHead(s) { this.status = s; }, end(b) { this.body = b; } };
-    await route.handler({ method: 'GET', url: 'http://local/api/x-control' + path, on() {} }, res);
-    return JSON.parse(res.body);
-  }
-
-  const live = await get('/activity');
+  const live = (await callRoute(route, 'GET', '/activity')).json;
   assert.equal(live.ok, true);
   assert.equal(live.available, true);
   assert.equal(live.active, true);
@@ -117,9 +112,7 @@ test('GET /activity 返回活动快照；无 tracker 时如实报不可用而不
 
   let route2 = null;
   new WatchServer({ listTabs: () => [] }).attach({ register: (r) => { route2 = r; } });
-  const res2 = { status: 0, body: '', writeHead(s) { this.status = s; }, end(b) { this.body = b; } };
-  await route2.handler({ method: 'GET', url: 'http://local/api/x-control/activity', on() {} }, res2);
-  const bare = JSON.parse(res2.body);
+  const bare = (await callRoute(route2, 'GET', '/activity')).json;
   assert.equal(bare.available, false, '没有 tracker 时必须自报不可用，客户端据此隐藏横幅');
   assert.equal(bare.active, false);
 });
