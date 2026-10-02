@@ -1,5 +1,75 @@
 # 更新日志
 
+## 0.5.25（2026-10-03）
+
+**修复 `x_vision_describe` 的 `attachment` 参数声明——模型传引用会被校验拒绝。**
+
+### 起因：一次纯文本模型压测（会话 `DzjC8UU32GL7`）
+
+用户继续用只吃文本的模型（`aiio/MiniMax-M3`）压测。**这一轮任务完成了**：Agent 走
+degraded 路径 → 坐标点击 + 物理键盘 → 在豆包桌面端生成 3 张 Gucci 香水产品图 → 下载到
+`C:\Users\sun_w\Downloads` → 关闭窗口。视觉模型这次**真的返回了描述**（Agent 据此拿到
+输入框与发送按钮的坐标并成功点击）。
+
+但过程里 Agent 反复撞一条参数错误，它自己下了判断：
+
+> seq 256「schema 报错，不传 attachment 也报错。**这是工具的 bug**。我换个调用方式」
+> seq 311「我之前通过不传 attachment 让它自己拍 tab_id 拍过一次，那次没报错。
+> 这回传 attachment 对象里某些字段不让传」
+
+**它判对了。**
+
+### 根因：裸 `{type:'object'}` 没声明 properties
+
+```js
+attachment: { type: 'object', required: true, description: '…' }
+```
+
+严格模式的函数调用校验下，「没声明 `properties`」等于「**没有字段被定义**」，于是模型
+按 schema 生成的调用里传进来的引用被拒。而 schema 是模型**唯一**的参数依据——没写清楚，
+模型就不可能传对。
+
+**为什么此前没有任何测试抓到**：宿主契约门（`scripts/host-contract-verify.mjs` 的
+`hostGate`）只校验 `output.schema`，**`parameters` 从来没被校验过**。而
+`verify:contract` 24/24 全绿——它验证的是"输出能过宿主校验器"，与"输入能不能被模型
+正确生成"是两件事。
+
+### 顺带修的第二个缺陷：描述漏了桌面截图
+
+原 description 只写「`x_browser_shot` 返回的 image 引用」，**根本没提 `x_desktop_shot`**。
+而这次压测、以及整个 degraded 兜底路径，**桌面截图才是唯一的图片来源**。这条描述在把
+模型往错方向带——它得先猜"哦桌面截图也能传"，或者干脆绕道 `tab_id`。
+
+现在 description 与 `tab_id` 都写明：`tab_id` 只对**浏览器标签页**有效，桌面窗口必须用
+`attachment`。
+
+### 修法
+
+- `attachment` 显式列出宿��� `ImageAttachmentRef` 的五个字段（`attachmentId` / `mediaType` /
+  `bytes` / `width` / `height`，`name` 可选），并写明「**原样整个传进来，一个字段都别删**」。
+- description 补上 `x_desktop_shot`，并强调这是 degraded 场景下唯一的图片来源。
+
+### 新增两道门（这次缺的是"输入侧"的校验）
+
+- **参数 schema 不得出现裸 `{type:'object'}`**：遍历全部工具的参数树，出现"某节点
+  `type:'object'` 但既无 `properties` 也无 `additionalProperties`"即失败。
+- **`x_vision_describe` 必须同时提到两个截图来源**，且 `attachment` 必须声明那五个字段、
+  description 必须含"原样/整个传"。
+
+**两道门的有效性已实测**：把 `attachment` 的 `properties` 删掉退回裸声明后，
+`pass 6 / fail 2` 当场抓出；恢复后全绿。
+
+验证：`npm test` **156/156**（154 + 2）、`npm run verify:contract` **24/24**。
+
+### 本轮观察，如实记录
+
+- **豆包窗口第二次观察时不再 `degraded`**：Agent 报「75 个元素，99 个有名字」并看到了
+  `#239「图像生成」按钮（有 Invoke）`——与首轮的 14 个空壳形成对比。**原因未查证**
+  （可能是 Electron 渲染器在窗口获得焦点后物化了，也可能是同一进程内的状态变化）。
+  这提示 `degraded` 判定是**按次观察**的，同一个窗口不同次观察结果可能不同。
+- Agent 用「不传 attachment、让工具自己拍 `tab_id`」绕过了参数问题（seq 392），
+  说明**绕过路径是存在的**——所以这次任务能完成，尽管主路径有缺陷。
+
 ## 0.5.24（2026-10-03）
 
 **修复 `x_vision_describe` 把「请求失败」误报成「模型返回空」。**

@@ -67,6 +67,52 @@ test('CHANGELOG 版本序列必须唯一且严格递减（新版本在最前）'
   }
 });
 
+test('参数 schema 不得出现裸 {type:object}（没声明 properties = 没定义字段）', async () => {
+  // 2026-10-03 真机压测（会话 DzjC8UU32GL7）暴露：x_vision_describe 的 attachment
+  // 声明成裸 { type: 'object', required: true }，Agent 传引用时被参数校验拒绝，它反复
+  // 撞这一条并自己下了判断——「这是工具的 bug。我换个调用方式」。**它判对了。**
+  //
+  // 之所以没被任何既有测试抓到，是因为宿主契约门只校验 output.schema
+  // （scripts/host-contract-verify.mjs 的 hostGate），parameters 从来没被校验过。
+  // 而裸 type:'object' 在严格模式的函数调用校验下等于"没有字段被定义"。
+  const { buildVisionTools } = await import('../lib/vision/tools.js');
+  const tools = buildVisionTools({ get: () => undefined }, { visionModel: '' }, { browserManager: null });
+  const walk = (node, path, hits) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach((v, i) => walk(v, `${path}[${i}]`, hits)); return; }
+    // 走到"某个对象的 schema 节点"：type 为 object 却既无 properties 也无 additionalProperties
+    if (node.type === 'object' && node.properties === undefined
+      && node.additionalProperties === undefined && !Array.isArray(node.required)) {
+      hits.push(path);
+    }
+    for (const [k, v] of Object.entries(node)) walk(v, `${path}.${k}`, hits);
+  };
+  for (const tool of tools) {
+    const hits = [];
+    walk(tool.parameters, `${tool.name}.parameters`, hits);
+    assert.deepEqual(hits, [],
+      `${tool.name} 的参数里有裸 {type:'object'} 没声明 properties：${hits.join('、')}。`
+      + '模型按 schema 生成调用参数，没声明 properties 等于"没有字段被定义"，'
+      + '传实际字段会被校验拒绝——真机上已因此让 Agent 反复撞墙并绕路。');
+  }
+});
+
+test('x_vision_describe 必须同时提到 x_browser_shot 与 x_desktop_shot', async () => {
+  // 之前 description 只写「x_browser_shot 返回的 image 引用」，而 desktop 路径才是
+  // degraded 场景下唯一的图片来源。描述漏了它等于把模型往错方向带。
+  const { buildVisionTools } = await import('../lib/vision/tools.js');
+  const tool = buildVisionTools({ get: () => undefined }, { visionModel: '' }, { browserManager: null })
+    .find((t) => t.name === 'x_vision_describe');
+  assert.ok(tool, 'x_vision_describe 必须存在');
+  assert.match(tool.description, /x_browser_shot/, '必须提到浏览器截图来源');
+  assert.match(tool.description, /x_desktop_shot/, '必须提到桌面截图来源——degraded 场景只有这一条');
+  const att = tool.parameters.properties.attachment;
+  for (const f of ['attachmentId', 'mediaType', 'bytes', 'width', 'height']) {
+    assert.ok(att.properties?.[f], `attachment 必须声明 ${f}，否则模型不知道要传什么`);
+  }
+  assert.match(att.description, /原样|整个传/, '必须说明要原样整个传，否则模型会挑字段传');
+});
+
 test('compareVersions 必须把 0.5.20b 与 0.5.20 判为相等（钉住上面那条推断）', async () => {
   const { compareVersions } = await import('../lib/core/updater.js');
   // 这条测试的用意是**提醒**：一旦哪天有人"改进"了 compareVersions 让它认字母后缀，
