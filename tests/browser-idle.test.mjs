@@ -63,3 +63,37 @@ test('shutdown 清理定时器，不留悬挂回调', async () => {
   assert.equal(m.idleTimer, null, '定时器已清');
   assert.equal(state.closed, 1);
 });
+
+test('gotoWithGrace：goto 超时但导航已提交时，宽限等待转成功', async () => {
+  // 2026-10-02 两次端到端实测的形态：goto 20s 超时，但页面其实在加载，
+  // x_browser_wait 等 load 随后成功。宽限等待把这类慢启动变成成功而不是报错。
+  const m = new BrowserManager({});
+  const calls = [];
+  const slowPage = {
+    async goto() { calls.push('goto'); throw new Error('Timeout 20000ms exceeded.'); },
+    async waitForLoadState(state) { calls.push(`wait:${state}`); },
+  };
+  await m.gotoWithGrace(slowPage, 'https://example.com/');
+  assert.deepEqual(calls, ['goto', 'wait:domcontentloaded'], '超时后应恰好宽限等待一次');
+});
+
+test('gotoWithGrace：宽限内仍未到 DCL，原样抛超时（由 mapNavigationError 归一）', async () => {
+  const m = new BrowserManager({});
+  const deadPage = {
+    async goto() { throw new Error('Timeout 20000ms exceeded.'); },
+    async waitForLoadState() { throw new Error('Timeout 10000ms exceeded.'); },
+  };
+  await assert.rejects(
+    () => m.gotoWithGrace(deadPage, 'https://example.com/'),
+    (err) => err.message.includes('Timeout 20000ms exceeded'),
+  );
+});
+
+test('gotoWithGrace：非超时错误立即上抛，不做无谓宽限', async () => {
+  const m = new BrowserManager({});
+  const refusedPage = {
+    async goto() { throw new Error('net::ERR_CONNECTION_REFUSED at https://example.com'); },
+    waitForLoadState: async () => { throw new Error('宽限不该被调用'); },
+  };
+  await assert.rejects(() => m.gotoWithGrace(refusedPage, 'https://example.com/'), /ERR_CONNECTION_REFUSED/);
+});

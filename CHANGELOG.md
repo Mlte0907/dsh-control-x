@@ -1,5 +1,27 @@
 # 更新日志
 
+## 0.5.11（2026-10-02）
+
+**导航超时不再误报：goto 超时后先做一次有界宽限等待，慢启动转成功。**
+
+### 现象（0.5.10 端到端验收，两轮一致）
+
+`x_browser_open` 百度报「导航超时（20s）」，但 `x_browser_tabs` 显示 URL 已设置（标题暂空），
+`x_browser_wait(loadState=load)` 随后成功、read 拿到完整 ARIA 树——**导航真实发生了，
+只是 domcontentloaded 迟到**。同日宿主侧两轮都复现；shell 直跑同一代码 8 次仅 1 次。
+网络通（curl 0.23s）、系统代理与 WPAD 自动检测均关闭，成因无法事后确证（不猜，
+参照 0.5.8 的纪律），但「提交后 DCL 迟到」这个形态是确定的。
+
+### 改动
+
+- `BrowserManager.gotoWithGrace`：goto 超时类错误（仅 `Timeout .*exceeded`）后追加一次
+  10s 的 `waitForLoadState('domcontentloaded')` 宽限——等到了就当慢启动成功，等不到才
+  上抛。`open` / `navigate` / `history` 三条路径统一走它；非超时错误（如
+  net::ERR_CONNECTION_REFUSED）不做宽限、立即上抛。
+- 超时文案改为点名恢复路径：URL 已设置 = 导航已提交，用 `x_browser_wait` 再等或重试
+  一次是正当恢复；URL 都没有才是真的不可达。
+- 最坏耗时 20s+10s=30s，换来的是把"实际能开成的页面"从失败里救回来。
+
 ## 0.5.10（2026-10-02）
 
 **修掉 `x_status` 的「value is not lossless JSON」；宿主源码终于抽到了，规则全文进了仓库。**

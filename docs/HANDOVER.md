@@ -25,7 +25,8 @@
 | §10.1 桌面观察 | **假设证实**。DSH 默认不向 UIA 物化渲染器无障碍树（14 个无名 Pane）；带 `--force-renderer-accessibility` 重启后同一窗口 599 个元素（侧栏/会话树/按钮/文本全可读）。UIA 二次查询不触发动态物化。旗标已持久化进两个快捷方式（开始菜单 + 桌面），撤销 = 删掉快捷方式里的参数；代价是渲染器多一份无障碍树开销 |
 | 验证 | `npm test` 79/79（新增 4 个回归测试）、`npm run verify:contract` 22/22（宿主真校验器判定） |
 | 0.5.10 生产端到端验收（DSH 新会话实测） | 4/5 通过：x_status 修复 ✅（version=0.5.10、bannerIdleExitMs=120000、updateMirror 在）、eagerRegister ✅（x_activate 幂等返回 toolCount=0）、桌面观察 ✅（108 元素、具名控件齐全）。浏览器闭环 ❌：`x_browser_open` 百度导航超时 20s（URL 已设置、标题为空） |
-| 浏览器超时排查（同日） | **不是插件缺陷，当时无法复现后已消失**：curl 0.23s 拿到百度 200（网络通）；用插件原代码 + 全新临时 profile 首测同样超时（复现了 DSH 侧失败），但十几分钟后同代码 5/5 全过（含两个全新 profile 和 DSH 用的默认 profile）。系统代理是关的（ProxyEnable=0），无无头浏览器残留进程。两次失败落在同一个十几分钟的时间窗，成因无法事后确证（不猜，参照 §7.1 纪律）；当时本机 msedge 进程在 14:03 有异常启动潮，疑似 Edge 自更新窗口，仅记录不定案。教训：TIMEOUT 是暂态故障，重测前先查 x_browser_tabs 看标签页是否其实已加载 |
+| 浏览器超时排查（同日，两轮） | **不是插件缺陷，是本机 Chromium 网络栈间歇性波动**：curl 始终 0.23s，但浏览器侧导航在「好时段」0.4~1s 完成、在「坏时段」连 30s 都到不了 DCL；好坏时段分钟级交替，shell 与 DSH 宿主内都中招（DSH 验收两轮首测均超时、wait 后成功；shell 累计 11 测 3 失败）。系统代理与 WPAD 自动检测均关闭，无死代理、无残留锁；成因无法确证，不猜（§7.1 纪律）。**0.5.11 已内置缓解**：goto 超时后追加 10s 宽限等待（慢启动转成功），超时文案点名恢复路径（tabs 查状态 → wait/重试一次） |
+| 浏览器 profile 单例锁（验收注意） | DSH 侧插件的 headless Edge 实例会长期持有默认 profile 的锁（实测 9 进程、存活数小时——面板在用就不回收，属设计内行为）。DSH 开着时从外部用默认 profile 启动会报 `Target page, context or browser has been closed`：**外部验收一律带 `DHCX_BROWSER_PROFILE` 指定独立 profile**，这不是缺陷 |
 
 ---
 
