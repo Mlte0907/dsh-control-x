@@ -24,7 +24,8 @@
 | 连带修复 | ① 设置页「浮窗空闲自动退出」是死设置（cfg 漏 getter 所致），已复活；② `tool.js` 缺必填键分支抛 `ControlXError` 却没 import（真触发是 ReferenceError），已修；③ `updater.js` 文件头教人算 integrity 的段落按 0.5.8 终态改写；④ `dsh-plugin.json` version 0.3.0 → 0.5.10 |
 | §10.1 桌面观察 | **假设证实**。DSH 默认不向 UIA 物化渲染器无障碍树（14 个无名 Pane）；带 `--force-renderer-accessibility` 重启后同一窗口 599 个元素（侧栏/会话树/按钮/文本全可读）。UIA 二次查询不触发动态物化。旗标已持久化进两个快捷方式（开始菜单 + 桌面），撤销 = 删掉快捷方式里的参数；代价是渲染器多一份无障碍树开销 |
 | 验证 | `npm test` 79/79（新增 4 个回归测试）、`npm run verify:contract` 22/22（宿主真校验器判定） |
-| 0.5.10 生产端到端验收（DSH 新会话实测） | 4/5 通过：x_status 修复 ✅（version=0.5.10、bannerIdleExitMs=120000、updateMirror 在）、eagerRegister ✅（x_activate 幂等返回 toolCount=0）、桌面观察 ✅（108 元素、具名控件齐全）。浏览器闭环 ❌：`x_browser_open` 百度导航超时 20s（URL 已设置、标题为空） |
+| 0.5.10 生产端到端验收（DSH 新会话实测） | **5/5 通过**（首测浏览器超时，按恢复路径重测通过，报告见仓库根 `验收报告-dsh-control-x-v0.5.10-2026-10-02.md`）：x_status 修复 ✅（version=0.5.10、bannerIdleExitMs=120000、updateMirror 在）、eagerRegister ✅（x_activate 幂等返回 toolCount=0）、桌面观察 ✅（108 元素、具名控件齐全）、浏览器闭环 ✅（重测，title=百度、ARIA 树约 4000 字符） |
+| 0.5.11 复验（同日追加） | **3/3 通过**：版本回归门 ✅（0.5.11、lossless 修复未回归）、导航 ✅（快速路径约 6s 一次成功，read/close 干净）、桌面抽查 ✅（135 元素 / 693ms，无退化）。**证据缺口（如实）**：本次未触发 gotoWithGrace 宽限分支——该路径现有 tests/browser-idle 3 个单元测试覆盖，生产触发要等机器网络再落坏时段，未覆盖 ≠ 验收失败 |
 | 浏览器超时排查（同日，两轮） | **不是插件缺陷，是本机 Chromium 网络栈间歇性波动**：curl 始终 0.23s，但浏览器侧导航在「好时段」0.4~1s 完成、在「坏时段」连 30s 都到不了 DCL；好坏时段分钟级交替，shell 与 DSH 宿主内都中招（DSH 验收两轮首测均超时、wait 后成功；shell 累计 11 测 3 失败）。系统代理与 WPAD 自动检测均关闭，无死代理、无残留锁；成因无法确证，不猜（§7.1 纪律）。**0.5.11 已内置缓解**：goto 超时后追加 10s 宽限等待（慢启动转成功），超时文案点名恢复路径（tabs 查状态 → wait/重试一次） |
 | 浏览器 profile 单例锁（验收注意） | DSH 侧插件的 headless Edge 实例会长期持有默认 profile 的锁（实测 9 进程、存活数小时——面板在用就不回收，属设计内行为）。DSH 开着时从外部用默认 profile 启动会报 `Target page, context or browser has been closed`：**外部验收一律带 `DHCX_BROWSER_PROFILE` 指定独立 profile**，这不是缺陷 |
 
