@@ -24,6 +24,8 @@
 | 连带修复 | ① 设置页「浮窗空闲自动退出」是死设置（cfg 漏 getter 所致），已复活；② `tool.js` 缺必填键分支抛 `ControlXError` 却没 import（真触发是 ReferenceError），已修；③ `updater.js` 文件头教人算 integrity 的段落按 0.5.8 终态改写；④ `dsh-plugin.json` version 0.3.0 → 0.5.10 |
 | §10.1 桌面观察 | **假设证实**。DSH 默认不向 UIA 物化渲染器无障碍树（14 个无名 Pane）；带 `--force-renderer-accessibility` 重启后同一窗口 599 个元素（侧栏/会话树/按钮/文本全可读）。UIA 二次查询不触发动态物化。旗标已持久化进两个快捷方式（开始菜单 + 桌面），撤销 = 删掉快捷方式里的参数；代价是渲染器多一份无障碍树开销 |
 | 验证 | `npm test` 79/79（新增 4 个回归测试）、`npm run verify:contract` 22/22（宿主真校验器判定） |
+| 0.5.10 生产端到端验收（DSH 新会话实测） | 4/5 通过：x_status 修复 ✅（version=0.5.10、bannerIdleExitMs=120000、updateMirror 在）、eagerRegister ✅（x_activate 幂等返回 toolCount=0）、桌面观察 ✅（108 元素、具名控件齐全）。浏览器闭环 ❌：`x_browser_open` 百度导航超时 20s（URL 已设置、标题为空） |
+| 浏览器超时排查（同日） | **不是插件缺陷，当时无法复现后已消失**：curl 0.23s 拿到百度 200（网络通）；用插件原代码 + 全新临时 profile 首测同样超时（复现了 DSH 侧失败），但十几分钟后同代码 5/5 全过（含两个全新 profile 和 DSH 用的默认 profile）。系统代理是关的（ProxyEnable=0），无无头浏览器残留进程。两次失败落在同一个十几分钟的时间窗，成因无法事后确证（不猜，参照 §7.1 纪律）；当时本机 msedge 进程在 14:03 有异常启动潮，疑似 Edge 自更新窗口，仅记录不定案。教训：TIMEOUT 是暂态故障，重测前先查 x_browser_tabs 看标签页是否其实已加载 |
 
 ---
 
