@@ -356,3 +356,19 @@ test('回归：skill 文案教模型走兜底路径，且不再教它改启动�
   // 反向对照：这两条兜底路径都要有，否则模型只会一直撞墙
   assert.doesNotMatch(c.slice(0, c.indexOf('degraded')), /x_desktop_shot/, '前置段落不应混入兜底指引');
 });
+
+test('skill 不得让模型为「已经看到的截图」再多绕一次调用', async () => {
+  // 2026-10-03 真机实测：豆包任务连拍 6 张 x_desktop_shot，全程**没调** x_vision_describe，
+  // 直接看图就完成了任务——因为 x_desktop_shot 的返回自带 image block，进的是 Agent
+  // 自己的上下文。而当时的 skill 文案把 x_vision_describe 写在前面、"或自己看图"写在
+  // 后面，等于在教模型多花一次模型调用去换一个它已经能看到的东西。
+  const { CONTROL_X_SKILL } = await import('../lib/skill.js');
+  const c = CONTROL_X_SKILL.content;
+  const line = c.split('\n').find((l) => l.includes('x_desktop_shot') && l.includes('x_vision_describe'))
+    ?? c.slice(Math.max(0, c.indexOf('x_desktop_shot') - 400), c.indexOf('x_desktop_shot') + 600);
+  assert.match(line + c.slice(0, 400),
+    /已经看得到|直接看|不需要再调/,
+    'skill 必须明确告诉模型：x_desktop_shot 的图片块已在上下文里，直接看');
+  assert.match(c, /最后手段|只吃文本/,
+    'x_vision_describe 必须被降级为「会话模型确实只吃文本时」的最后手段');
+});
