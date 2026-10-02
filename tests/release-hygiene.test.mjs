@@ -76,3 +76,35 @@ test('compareVersions 必须把 0.5.20b 与 0.5.20 判为相等（钉住上面�
   assert.equal(compareVersions('0.5.21', '0.5.20'), 1, '正常递增必须能被认出来');
   assert.equal(compareVersions('0.5.20', '0.5.21'), -1);
 });
+
+test('改了 lib/ 就必须同时改过版本号（补上"文件自洽"查不出的那道门）', async () => {
+  // 上面所有测试查的都是**文件之间是否自洽**（两个 json 一致、CHANGELOG 对得上）。
+  // 但真正咬过人的第三种形态是：**代码改了、CHANGELOG 也写了、唯独版本号没动**——
+  // 文件之间依然自洽（两个 json 都停在同一个旧版本），所以上面全绿，
+  // 而自更新 REF='main' 读到的还是旧版本号 compareVersions 返回 0，
+  // 面板显示"已是最新"，**新代码永远送不到用户手上**。
+  //
+  // 2026-10-03 已发生两次（0.5.20 一次、b2c6477/7268e77 又一次）。这道门用 git 历史判定：
+  // 最后一次改动 lib/ 的提交，必须被"最后一次改动版本号"的提交包含进去。
+  const { execFileSync } = await import('node:child_process');
+  const git = (...args) => {
+    try {
+      return execFileSync('git', args, {
+        cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch { return null; } // 不是 git 仓库 / 没装 git -> 跳过
+  };
+  if (git('rev-parse', '--git-dir') === null) {
+    return; // 非 git 环境，本门不适用
+  }
+  const lastLib = git('log', '-1', '--format=%H', '--', 'lib');
+  const lastVersion = git('log', '-1', '--format=%H', '--', 'package.json', 'dsh-plugin.json');
+  if (!lastLib || !lastVersion) return;
+
+  const covered = git('merge-base', '--is-ancestor', lastLib, lastVersion) === '';
+  assert.equal(covered, true,
+    `lib/ 最后一次改动是 ${lastLib.slice(0, 8)}，而版本号最后一次改动是 ${lastVersion.slice(0, 8)}：`
+    + '代码改动没被任何一次版本号改动覆盖。自更新读的是远端 package.json 的 version，'
+    + '版本没变 -> compareVersions 返回 0 -> 面板显示"已是最新" -> 用户拿不到这些代码。'
+    + '本项目已被这个形态咬过三次（0.5.5 市场卡住、0.5.20、b2c6477/7268e77）。');
+});

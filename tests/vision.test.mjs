@@ -157,6 +157,60 @@ test('自动回退：某个候选抛错不阻断后面的候选，且宿主错�
   assert.match(r.attempts[0].error, /route exploded/, '宿主错误不许吞掉');
 });
 
+test('回归：宿主把适配器失败包成 finish chunk，不抛异常——不得再报成"返回空"', async () => {
+  // 2026-10-03 真实事故。用户故意用只吃文本的模型（aiio/MiniMax-M3）压测：
+  // Agent 调 x_vision_describe，**三个候选全部表现为"返回空"**，于是结论一度变成
+  // "没有模型能看图"。
+  //
+  // 真相：宿主**不会为适配器失败抛异常**。它把失败包成一个终止 chunk 就结束流
+  // （dsh-llm/lib/index.js 的 adapterFailureChunk）：
+  //   { type: 'finish', reason: { kind: 'error', failure: { message, code, status? } } }
+  // 旧实现只收集 text-delta，于是把一次硬失败（鉴权 / 模型路由 / 请求被拒）报成 0 个字，
+  // 真实错误整个丢掉。
+  const llm = scriptedLlm(() => [
+    { type: 'finish', reason: { kind: 'error', failure: { message: '401 invalid api key', code: 'INVALID_CREDENTIALS', status: 401 } } },
+  ]);
+  await assert.rejects(
+    () => describeImage({ llm, target: { provider: 'p', model: 'm' }, attachment: ATT }),
+    (e) => {
+      assert.match(e.message, /401/, 'HTTP 状态必须带出来');
+      assert.match(e.message, /invalid api key/, '宿主原文必须带出来——不然无法定位');
+      assert.equal(e.code, 'INVALID_CREDENTIALS', '失败码必须保留，classifyVisionError 靠它分类');
+      return true;
+    },
+  );
+});
+
+test('回归：失败必须被分类成 call-failed 而不是 empty（否则误报成"模型看不了图"）', async () => {
+  const llm = scriptedLlm(() => [
+    { type: 'finish', reason: { kind: 'error', failure: { message: 'model not found', code: 'UNKNOWN' } } },
+  ]);
+  const r = await describeImageWithFallback({
+    llm, candidates: [{ provider: 'p', model: 'a' }, { provider: 'p', model: 'b' }], attachment: ATT,
+  });
+  assert.equal(r.attempts[0].reason, 'call-failed',
+    '宿主失败 chunk 必须体现为 call-failed；记成 empty 就是把"请求没发出去"说成"模型不行"');
+  assert.match(r.attempts[0].error, /model not found/);
+  assert.equal(r.attempts.length, 2, '模型级失败仍应继续试下一个候选');
+});
+
+test('回归：正常的 finish（stop）不算失败', async () => {
+  const llm = scriptedLlm(() => [delta('一张猫'), FIN]);
+  const r = await describeImage({ llm, target: { provider: 'p', model: 'm' }, attachment: ATT });
+  assert.equal(r.text, '一张猫', 'reason.kind=stop 是正常结束，绝不能被当成失败抛出去');
+});
+
+test('回归：aborted 也要当失败处理（且可被 classifyVisionError 认出）', async () => {
+  const llm = scriptedLlm(() => [
+    { type: 'finish', reason: { kind: 'aborted', failure: { message: 'aborted by signal', code: 'ABORTED' } } },
+  ]);
+  await assert.rejects(
+    () => describeImage({ llm, target: { provider: 'p', model: 'm' }, attachment: ATT }),
+    (e) => e.code === 'ABORTED' && /aborted/.test(e.message),
+  );
+  assert.equal(classifyVisionError({ code: 'ABORTED', message: 'aborted by signal' }), 'aborted');
+});
+
 test('自动回退：全部候选不可用时返回空 + 完整清单（绝不谎报成功）', async () => {
   const r = await describeImageWithFallback({
     llm: scriptedLlm(() => []),

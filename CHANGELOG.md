@@ -1,5 +1,81 @@
 # 更新日志
 
+## 0.5.24（2026-10-03）
+
+**修复 `x_vision_describe` 把「请求失败」误报成「模型返回空」。**
+
+### 起因：一次有意的压测暴露了它
+
+用户**故意**用只吃文本的模型（`aiio/MiniMax-M3`，未配置视觉）来测「Agent 会不会去调
+视觉模型辅助」。实测 Agent 调了 `x_vision_describe`（会话 `8otitHr2hTPM` seq 133），
+但**三个候选全部表现为「返回空」**，于是它说「所有视觉模型都不可用…我自己又看不到
+这张图」，任务卡死。
+
+### 根因（对照宿主源码确认，非推测）
+
+**宿主不会为适配器失败抛异常。** `dsh-llm/lib/index.js`：
+
+```js
+} catch (error) {
+  yield adapterFailureChunk(error, options.signal);
+  return;
+}
+```
+
+`adapterFailureChunk`（同文件 `:2376`）把失败包成一个**终止 chunk**：
+
+```js
+{ type: 'finish', reason: { kind: 'error', failure: { message, code, status? } } }
+```
+
+而 `describeImage` 的 `collectText` 只认 `chunk.type === 'text-delta'`，**完全无视
+finish chunk**。于是一次硬失败（鉴权 / 模型路由 / 请求被拒）被报成「模型返回 0 个字」：
+
+- 真实错误整个丢掉，调用方无从得知**请求压根没发出去**；
+- `classifyVisionError` 看不到它（没有任何东西抛出来），`attempts` 里记成
+  `reason=empty` 而不是 `call-failed` ——把「请求失败」说成「这个模型看不了图」；
+- 三个候选同时这样报，看起来就像「没有模型能看图」，**排查方向被完全带偏**。
+
+这也解释了 0.5.20 那次为什么始终定位不了：**当时「返回空」这个症状本身就是错的。**
+
+### 修法
+
+- `describeImage` 识别 `finish` 且 `reason.kind` 为 `error` / `aborted` 的 chunk，
+  **抛出去**而不是退化成空文本。错误 message 带宿主原文，HTTP status 一并带出，
+  `failure.code` 保留到异常的 `code` 上供 `classifyVisionError` 分类。
+- `reason.kind='stop'` 是正常结束，绝不能当成失败（否则正常调用会被误报）。
+- 有部分文本又带 error finish 时也按失败处理——`finish.kind=error` 意味着这次调用失败了。
+
+新增 4 条回归测试，全部针对宿主的真实行为：失败 chunk 必须抛异常且保留 code 与 status；
+`attempts` 必须记为 `call-failed` 而非 `empty`；正常 `finish(stop)` 不得被当成失败；
+`aborted` 要被 `classifyVisionError` 认成 `aborted`。
+
+### 顺带补上发布卫生门的盲区
+
+`tests/release-hygiene.test.mjs` 原有 5 条查的都是**文件之间是否自洽**（两个 json 一致、
+CHANGELOG 对得上）。但真正咬过人的第三种形态是：**代码改了、CHANGELOG 也写了、唯独
+版本号没动**——此时文件之间**依然自洽**，所以全绿；而自更新 `REF='main'` 读到的还是旧
+版本号，`compareVersions` 返回 0，面板显示「已是最新」，新代码永远送不到用户手上。
+
+**本项目已被这个形态咬过三次**：0.5.5 插件市场静默卡住、0.5.20、以及本次的
+`b2c6477` / `7268e77`（我又漏了）。
+
+新增第 6 条：用 git 历史判定「最后一次改动 `lib/` 的提交，必须被最后一次改动版本号的提交
+包含进去」。实测有效——加上这条门后它当场报 `pass 5 / fail 1`，把当前这个漏抓了出来。
+
+### 尚未定位（如实记录）
+
+修完之后才知道三个候选**真正**的失败原因是什么——那才是「视觉到底能不能用」的答案。
+目前只知道：不是「模型返回空」，而是宿主报了某种终止失败。下一轮实测让 Agent 把
+`attempts` 原文贴出来即可定位。
+
+**另一处宿主行为差异，本轮发现但未改**：宿主自己的 `read_image` 在读图**之前**先调
+`assertImageCapableRoute`（`dsh-tool-fs/lib/index.js:1006`），先确认「接收这张图的模型
+真的吃图」，不行就直接拒。`x_vision_describe` 没有这个前置检查，目前靠失败反馈兜底。
+等拿到真实失败码之后再决定要不要补——现在补属于猜。
+
+验证：`npm test` **153/153**（149 + 4）、`npm run verify:contract` **24/24**。
+
 ## 0.5.22（2026-10-03）
 
 ### ⚠️ 撤回一条 0.5.20 的错误结论
