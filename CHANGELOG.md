@@ -2,6 +2,49 @@
 
 ## 0.5.20（2026-10-03）
 
+### 0.5.20b 真机复验撞上「Stored attachment metadata does not match its reference.」
+
+0.5.20 真机复验（用户把图片发进对话问「能识别到这张图么」，连试三次并在三种模型间切换）
+失败于宿主附件层。取证结论：
+
+- **不是 0.5.20 造成的**：`git show --stat HEAD` 证明该提交只碰 `lib/vision.js`、
+  `lib/vision/tools.js`、测试与文档，**没有任何附件代码**。
+- **不是字节损坏**：附件库 `objects/5b/5b9e…`（738203 字节、PNG、540×867）的 SHA256 与
+  它的内容寻址路径完全一致（`Get-FileHash` 与 node `crypto` 双向复算）。
+  抛出点 `readImageFile` 的**上一行**才是 digest 校验，digest 已过才会走到元数据比对。
+- 因此失败在 `dsh-attachment-local/lib/index.js:609`：
+  `metadata.mediaType !== ref.mediaType || data.byteLength !== ref.bytes ||
+  metadata.width !== ref.width || metadata.height !== ref.height`。
+  即**图片本身完好，但 ref 里记录的元数据与实际字节对不上**。
+- 观察到的相关性（**未证实**，仅记录）：两张失败图片的尺寸 540×867 / 542×877 **不是 10
+  的倍数**，而附件库里此前所有成功图片（1600×230、620×110、2560×150、1296×1007…）
+  **全是 10 的倍数**；失败的两张也缺少成功图片都有的 `sRGB`/`gAMA`/`pHYs` 块。
+  像是客户端缩放后才上传的图。**这只是相关性，不当作根因。**
+
+**证据缺口（如实）**：没能拿到那份 ref——它只存在于会话消息里，投影缓存与附件库都不存
+ref 明细，全盘搜 `5b9e7db1`/`6118eed0` 无命中。所以**究竟是哪一项（mediaType / bytes /
+width / height）对不上，目前无法断言**。
+
+### 顺带修掉 0.5.20 自己引入的一个缺陷
+
+新的回退逻辑原先对所有异常一律重试下一个候选。但附件级错误**与选哪个模型完全无关**——
+换模型、重试全部候选都只会再抛一次同样的错。那次真机复验会白花三次调用，还会让用户
+误以为「多换几个模型说不定能行」。
+
+- 新增 `classifyVisionError()`：把错误分成 `attachment` / `aborted` / `model`。
+- `describeImageWithFallback` 遇 `attachment` / `aborted` **立刻停**，不再试后续候选。
+  `model` 类（限流、鉴权等）仍然继续试——那些换模型也许真能成。
+- 报告新增 `attachmentClaim`：把插件这边持有的
+  `attachmentId / mediaType / bytes / width / height` **原样摊开**。
+  宿主那句错误只说「对不上」，不说**哪一项**对不上；没有 claim 就无法定位。
+- `attempts[].reason` 新增 `attachment-invalid`，其说明明确写了
+  「**图片本身坏了，与选哪个模型无关**」——防止用户被引去换模型。
+
+验证：`npm test` **139/139**（新增 3 条：错误分类、附件坏只试一次且摊开 claim、
+模型类错误仍继续回退）、`npm run verify:contract` **24/24**。
+
+### 0.5.20a 修复 `x_vision_describe` 在真实环境静默失效
+
 **修复 `x_vision_describe` 在真实环境静默失效。**
 
 ### 怎么发现的

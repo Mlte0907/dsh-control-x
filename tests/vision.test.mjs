@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import {
   listVisionModels, pickModel, describeImage, isVisionModel,
   candidateModels, describeImageWithFallback, describeAttempts, HOST_IMAGE_OMITTED_MARKER,
+  classifyVisionError,
   VISION_AUTO, VISION_RANDOM,
 } from '../lib/vision.js';
 
@@ -164,6 +165,66 @@ test('自动回退：全部候选不可用时返回空 + 完整清单（绝不�
   assert.equal(r.text, '');
   assert.equal(r.attempts.length, 2);
   assert.match(describeAttempts(r.attempts), /全部/);
+});
+
+// ── 2026-10-03 真机复验撞上：宿主读回图片时校验元数据不通过 ──
+// 真实报错："Stored attachment metadata does not match its reference."
+// 抛出点 dsh-attachment-local/lib/index.js 的 readImageFile：digest 校验已过（字节是对的），
+// 但 probeImage(data) 得到的 mediaType/bytes/width/height 与 ref 记录的对不上。
+//
+// 这类错误**与选哪个模型无关**，所以回退逻辑必须立刻停——否则会白花三次调用，
+// 还会让用户误以为"多换几个模型说不定能行"。
+
+test('错误分类：附件类错误必须与模型类错误分开', () => {
+  assert.equal(classifyVisionError({ code: 'ATTACHMENT_CORRUPT', message: 'x' }), 'attachment');
+  assert.equal(classifyVisionError({ code: 'ATTACHMENT_NOT_FOUND', message: 'x' }), 'attachment');
+  assert.equal(classifyVisionError({ code: 'INVALID_IMAGE', message: 'x' }), 'attachment');
+  assert.equal(classifyVisionError({ message: 'Stored attachment metadata does not match its reference.' }), 'attachment');
+  assert.equal(classifyVisionError({ code: 'IMAGE_TYPE_MISMATCH', message: 'x' }), 'attachment');
+  assert.equal(classifyVisionError({ code: 'ABORTED', message: 'aborted by signal' }), 'aborted');
+  assert.equal(classifyVisionError(new Error('429 rate limited')), 'model');
+  assert.equal(classifyVisionError({}), 'model');
+});
+
+test('附件坏了立刻停：只试一个候选，不白花另外两个的调用', async () => {
+  let calls = 0;
+  const llm = {
+    stream: async function* () {
+      calls += 1;
+      const err = new Error('Stored attachment metadata does not match its reference.');
+      err.code = 'ATTACHMENT_CORRUPT';
+      throw err;
+    },
+  };
+  const r = await describeImageWithFallback({
+    llm,
+    candidates: [{ provider: 'p', model: 'a' }, { provider: 'p', model: 'b' }, { provider: 'p', model: 'c' }],
+    attachment: { ...ATT, width: 111, height: 222, bytes: 999 },
+  });
+  assert.equal(calls, 1, '附件级错误换模型不会有不同结果，必须只试一次');
+  assert.equal(r.attempts.length, 1);
+  assert.equal(r.attempts[0].reason, 'attachment-invalid');
+  assert.match(r.attempts[0].error, /Stored attachment metadata/);
+  // 关键：把我们以为的元数据摊出来，才能和附件库实际值逐项比
+  assert.deepEqual(r.attempts[0].attachmentClaim,
+    { attachmentId: 'sha256:x', mediaType: 'image/jpeg', bytes: 999, width: 111, height: 222 });
+  const msg = describeAttempts(r.attempts);
+  assert.match(msg, /与选哪个模型无关/, '必须说清这不是模型的锅，否则用户会去换模型');
+  assert.match(msg, /width=111/, '必须把 claim 打出来');
+  assert.match(msg, /height=222/);
+  assert.match(msg, /bytes=999/);
+});
+
+test('模型类错误仍然继续试下一个候选（别把回退一起关掉）', async () => {
+  const llm = scriptedLlm((n) => {
+    if (n === 'p/boom') { const e = new Error('429 too many requests'); e.code = 'RATE_LIMITED'; throw e; }
+    return [delta('看到了'), FIN];
+  });
+  const r = await describeImageWithFallback({
+    llm, candidates: [{ provider: 'p', model: 'boom' }, { provider: 'p', model: 'ok' }], attachment: ATT,
+  });
+  assert.equal(r.text, '看到了', '限流/鉴权这类换个模型也许能成，必须继续试');
+  assert.equal(r.attempts.length, 2);
 });
 
 test('isVisionModel 只认显式声明 image 的（缺字段不算）', () => {
