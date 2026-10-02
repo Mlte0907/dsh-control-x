@@ -8,14 +8,30 @@
 
 ## 0. 一句话现状
 
-插件 **0.5.10**（发版轮完成）：22 个工具全部注册且模型可见；
-**§10.2 x_status 报错已定案修复**（根因是 cfg 漏 getter，不是 schema）；**§10.1 桌面观察
-已实证突破**——DSH 带 `--force-renderer-accessibility` 启动后 UIA 树 14 → 599 个元素，
-旗标已写进开始菜单与桌面快捷方式，当前 DSH 实例已带旗标运行。
+插件 **0.5.19**：24 个工具全部注册且模型可见；面板 HTTP 已补三层栅栏（0.5.18）；
+**§10.1 桌面观察已推翻旧结论并换了方案**——旗标 `--force-renderer-accessibility`
+实测**已无效**，插件**不再修改任何应用或宿主的启动配置**，改走
+`degraded` 标记 + `x_desktop_shot` / `x_desktop_click_at` 兜底（详见 §0c）。
+
+---
+
+## 0c. 0.5.19 交接轮做了什么（2026-10-03）——§10.1 结论反转
+
+| 项 | 结论 |
+|---|---|
+| **为什么推翻** | 三条实测证据，不是推理：① `probe-flag-playwright.mjs` 在 playwright chromium-1246 上实测**加与不加旗标是同一份树**（102 vs 103 元素，纯噪声）；② `SPI_SETSCREENREADER`（替代路线）是**一次性闩锁**——`probe-spi-timing.mjs` 实测开启后 13 → 187 元素、关掉后仍 159，**树不会消失**，即用一次永久生效，与"按需开关"的语义相反；③ 只改 `.lnk` 覆盖不到"开始菜单搜索 / 宿主自重启"，安装器新建快捷方式就会出两个 |
+| **越界判定** | 用户定的原则：**插件不应凌驾于宿主之上**。宿主能给的能力应当通过宿主获得，改宿主的启动方式不属于插件的职责 |
+| **新方案（ZCode 式 strategy:auto）** | ① `x_desktop_tree` 输出 `degraded` + `degradedReason`（阈值 `DEGRADED_NAMED_MAX=8` / `DEGRADED_TOTAL_MIN=20`，用真机 5 个数据点校准：DSH 空壳 13/4 → true，OpenCode 48/33、Edge 499/461、DSH 树物化后 163/142 → false）；② `x_desktop_shot`（helper 新增 `window_shot`，`PrintWindow` + `PW_RENDERFULLCONTENT`，**不受遮挡影响**——实测被压着的 DSH 窗口仍取到 1965x1106 / 102 唯一色 / 0% 近黑，另有近黑帧检测，避免把"没画面"误报成"一个黑色的应用"）；③ `x_desktop_click_at`（helper 新增 `window_rect`，纯坐标不解析元素，这是它在树空掉时唯一可用的原因）；④ 旗标功能整条删除 |
+| **删除清单** | `lib/core/host-accessibility.js`、`lib/host-shortcuts.ps1`、`tests/host-accessibility.test.mjs`、`watch.js` 的 `GET/POST /host-accessibility` 两路由、`WatchServer` 的第 6 个构造参数、`lib/index.js` 的 `createHostAccessibilityController` 调用、设置页开关（换成只读说明卡 `ElectronNotePanel`） |
+| **验证** | `npm test` 125/125（新增 13 条 `degraded-fallback.test.mjs`，含一条扫描全 lib 代码确保不再出现写启动配置能力的回归测试）、`npm run verify:contract` 24/24（宿主真校验器）、真机端到端（真实 DSH 窗口：degraded 判定、真实 JPEG 33904 字节、降采样系数换算 x1.535 均通过） |
+| **一个诚实的数据修正** | 真机验收时 DSH 窗口已报 163 元素 / 142 有名字、**不再 degraded**——因为本会话早前做 `SPI_SETSCREENREADER` 实验时树已被物化，而同一进程内**关不掉**。这正是"闩锁"证据本身。它**不能**用来证伪阈值，所以另起了 `probe-threshold.mjs`：新拉 4 个 chromium 进程（极简页/丰富页 × 加旗标/不加旗标），四种组合全部加 0 元素，再次印证旗标已死 |
 
 ---
 
 ## 0b. 0.5.10 交接轮做了什么（2026-10-02 下午）
+
+> ⚠️ **本节是历史记录，其中 §10.1 那行的结论已在 0.5.19 被推翻**（见 §0c）。留在此处是为了
+> 记录"当时基于什么证据做了那个决定"，不是当前结论。
 
 | 项 | 结论 |
 |---|---|
@@ -305,17 +321,40 @@ GET  /api/x-control/activity  → {overlay, active, running, graceMs}
 
 ## 10. 未决问题（带已排除项，不要重走）
 
-### 10.1 桌面观察质量差 —— ✅ 0.5.10 交接已定案（宿主侧问题，非插件缺陷）
+### 10.1 桌面观察质量差 —— ✅ 0.5.19 改方案（旧结论已推翻，勿照旧方案动手）
 
-`x_desktop_tree` 对 Electron 应用（DSH 本体）只返回 13 个无名 Pane，根因**已证实**：
-Chromium 渲染器无障碍树未物化。DSH 带 `--force-renderer-accessibility` 重启后同一窗口
-14 → 599 个元素。旗标已写进开始菜单与桌面两个快捷方式；DSH 关窗是隐藏到托盘，
-重启要用任务管理器结束进程或 `taskkill /F /IM "DeepSeek Harness.exe"`。
-原生 Win32 应用不受影响。详情见 `docs/DSH-SDK-CONTRACT.md §11` 末行。
+`x_desktop_tree` 对 Electron 应用（DSH 本体）只返回 13 个无名 Pane，这个**现象**仍然成立
+（DSH 首次观察实测 13 元素 / 4 有名字）。**但 0.5.10 给出的解法已被推翻**：
 
-- ~~未证实：推测是 Chromium 渲染进程未启用 accessibility 树~~ → 已证实并持久化。
+- ~~「加 `--force-renderer-accessibility` 就能 14 → 599 元素」~~ → **实测无效**。
+  `probe-flag-playwright.mjs`：chromium-1246 加与不加旗标同一份树（102 vs 103，纯噪声）。
+- ~~「用 `SPI_SETSCREENREADER` 当替代开关」~~ → **一次性闩锁，关不掉**。
+  `probe-spi-timing.mjs`：开启后 13 → 187，关掉后仍 159（"从未开启"时才是 13）。
+  树一旦物化就常驻至进程退出——用一次就永久生效，与"按需开关"语义相反，且**有副作用**。
+- ~~「写进开始菜单 + 桌面快捷方式，撤销 = 删掉参数」~~ → **覆盖不全且留残留**：
+  覆盖不到"开始菜单搜索 / 宿主自重启"，安装器若新建快捷方式就会出现两个。
+
+**现方案（0.5.19 起）**：不改任何启动配置，走树/截图双路径。
+
+| 环节 | 工具 | 行为 |
+|---|---|---|
+| 识别 | `x_desktop_tree` | 多输出 `namedCount` 与 `degraded`。`degraded=true` 时附带 `degradedReason`，里面写明"语义动作不可用、重试观察无用、改走截图+坐标"——模型必须机器可读地知道，而不是靠人猜 |
+| 识别 | `x_desktop_shot` | 窗口级 JPEG 截图。`PrintWindow` + `PW_RENDERFULLCONTENT` 让窗口自己画，**不受遮挡影响**。近黑帧直接判失败（"没画面" ≠ "一个黑色的应用"）。严格绑定 observation，不能凭 hwnd 截任意窗口 |
+| 动作 | `x_desktop_click_at` | 窗口内坐标点击。**不解析任何元素**，所以树空掉也能用；坐标越界即拒；过全套物理门控（三重门控 + 向用户明示 + 降采样换算提示） |
+| 键盘 | `x_desktop_key` / `x_desktop_type` | 本来就不依赖元素，树空掉时仍可用 |
+
 - 已排除：不是权限问题；不是总开关；**UIA 客户端二次查询不会触发动态物化**（实测）；
   DSH 的 19387 端口是内部 API 不是 CDP，无法免重启启用。
+- 阈值校准（真机 5 点，`probe-threshold.mjs` + 真机端到端）：DSH 空壳 13/4 → `degraded=true`；
+  OpenCode 48/33、Edge 152 499/461、DSH 树物化后 163/142 → `degraded=false`。
+  `DEGRADED_NAMED_MAX=8` 落在 4 与 33 之间、`DEGRADED_TOTAL_MIN=20` 落在 13 与 48 之间，
+  两侧都有足够宽的间隔。改动阈值必须同步改 `tests/degraded-fallback.test.mjs` 的期望。
+- ⚠️ **别拿同一进程复验**：树一旦被 `SPI_SETSCREENREADER` 或被渲染器物化，同进程内就一直
+  在。要验"从未开启"的干净状态，必须新起进程。
+- ⚠️ **PowerShell 5.1 坑（本次又踩）**：`Add-Type -TypeDefinition` 会把 here-string 写成临时
+  `.cs` 再交给编译器，那一步**按 ANSI 解码**——C# 块里的中文注释会被当代码，报
+  "无效的表达式项"。`uia-helper.ps1` 里的 C# 块**必须纯 ASCII**（注释也用英文），
+  与 `lib/banner-overlay.ps1` 保持一致；中文说明写在 PS 侧注释里。
 
 ### 10.2 `x_status` 返回 `value is not lossless JSON` —— ✅ 0.5.10 交接已定案修复
 
@@ -342,11 +381,9 @@ Chromium 渲染器无障碍树未物化。DSH 带 `--force-renderer-accessibilit
   （`dsh-control-x-0.5.11-2026-10-02T07-13-37` + 同时间戳 package.json / pnpm-lock
   的 `.cx-bak` 一对），其余全部删除。
 - 遗留观察项（无需行动）：① gotoWithGrace 宽限分支的生产触发（已单测覆盖，
-  等机器网络再落坏时段自然验证）；② ~~无障碍旗标挂快捷方式~~ → **0.5.13 已产品化**：
-  设置页「桌面观察」开关（默认关、点击写入/移除快捷方式旗标、重启生效），
-  信任边界 = 插件唯一写宿主启动配置的功能、只在用户显式点击时发生、永不碰其他应用；
-  本机的旗标是 0.5.10 交接轮 agent 经授权手改的，现在由开关接管同一状态；
-  ③ ~~Chromium 网络间歇波动成因未定~~ → **用户已确认（2026-10-02）：家里网络丢包波动，
+  等机器网络再落坏时段自然验证）；② ~~无障碍旗标挂快捷方式~~ → **0.5.13 产品化成
+  设置页开关，0.5.19 又整条下线**（实测旗标已无效 + 插件不该改宿主启动配置，
+  见 §0c）；③ ~~Chromium 网络间歇波动成因未定~~ → **用户已确认（2026-10-02）：家里网络丢包波动，
   日常使用同样受影响**——机器/网络级问题，非插件缺陷，宽限缓解保持。
 
 ---

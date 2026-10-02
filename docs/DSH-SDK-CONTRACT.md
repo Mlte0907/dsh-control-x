@@ -153,7 +153,7 @@ desktop 应用自带凭据，M1 在其中做首次真实调用验证。
 | 观察树有 maxElements 上限（默认 200，可调 500）——元素计数类断言会被 cap 掩盖 | 效果验证应使用**状态字段**（value/toggleState）而非元素计数 |
 | 观察性能：499 元素全量 ~850ms（含 PowerShell 进程启动 ~1s 另计） | 每工具调用 spawn 一次 helper 可接受；常驻 helper 为后续优化项 |
 | x_desktop_value 写入"复制字符"Edit、Toggle 高级查看，全程未抢焦点（charmap 窗口 focused=false） | §6.7-3 在 Windows 上成立的直接证据 |
-| **Electron 应用（含 DSH 本体）默认不向 UIA 物化渲染器无障碍树**：DSH 窗口只暴露 13 个无名 Pane + 最小化/最大化/关闭，`Document` 无名无子树——「工具能调但看不见什么」（2026-10-02 实测） | 用 `--force-renderer-accessibility` 重启 DSH 后同一窗口从 **14 个元素变为 599 个**，侧栏/会话树/按钮/文本全部可读。UIA 客户端二次查询不会触发动态物化（实测无效）。已把该旗标写进开始菜单与桌面快捷方式；代价是渲染器多一份无障碍树的开销，撤销 = 删掉快捷方式里的参数 |
+| **Electron 应用（含 DSH 本体）默认不向 UIA 物化渲染器无障碍树**：DSH 窗口只暴露 13 个无名 Pane + 最小化/最大化/关闭，`Document` 无名无子树——「工具能调但看不见什么」（2026-10-02 实测） | **定案：不做任何启动配置修改，走树/截图双路径**（2026-10-03）。曾以为的解法 `--force-renderer-accessibility` 经复测**已无效**（playwright chromium-1246 实测加与不加同一份树；本机 Edge 152 / OpenCode 也证明现代 Chromium 默认开 UIA）；`SPI_SETSCREENREADER` 是**一次性闩锁**、关不掉（关后仍 159 元素，"从未开启"时只有 13）；只改 `.lnk` 覆盖不全且留残留。→ `x_desktop_tree` 输出 `degraded=true` 让模型机器可读地识别，兜底用 `x_desktop_shot`（`PrintWindow` + `PW_RENDERFULLCONTENT`，实测对被遮挡的 DSH 窗口仍取到 1965x1106 完整画面）+ `x_desktop_click_at`（纯坐标，不解析元素） |
 
 ## 12. 双 home 陷阱（M5 实测，2026-09-30）
 

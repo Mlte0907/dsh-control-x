@@ -76,11 +76,24 @@ dsh --profile <你的profile名> \
 
 ## 状态
 
+**v0.5.19（2026-10-03）**：**下线「改宿主启动快捷方式加无障碍旗标」，代之以树/截图双路径。**
+起因是那条功能本身站不住（三条实测证据）：`--force-renderer-accessibility` 在现代 Chromium
+上**已无效**（playwright chromium-1246 实测加与不加都是同一份树）；替代方案
+`SPI_SETSCREENREADER` 是**一次性闩锁**、关不掉（关后仍 159 元素，而"从未开启"时只有 13），
+等于用一次就永久生效；只改 `.lnk` 也覆盖不到"开始菜单搜索 / 宿主自重启"等入口。
+更重要的是那条路本身越界——**插件不该凌驾于宿主之上**，宿主能给的能力应当通过宿主拿。
+现在 Electron 应用走 ZCode 式的 `strategy:auto`：树能用就用树，`x_desktop_tree` 会用
+`degraded=true` 机器可读地告诉你"这棵树不能当主干"（DSH 首次观察实测 13 元素 / 4 有名字）；
+不能用就 `x_desktop_shot`（`PrintWindow` 窗口级截图，不受遮挡影响）+ `x_desktop_click_at`
+（纯坐标点击，走全套物理门控）。插件不再修改任何应用或宿主的启动配置。
+详见 [CHANGELOG.md](CHANGELOG.md)。
+
 **v0.5.18（2026-10-02）**：**修复面板 HTTP 接口无鉴权的高危缺陷**——`/api/x-control/*`
 注册在宿主 webServer 上，而 webserver 自身不做任何鉴权（宿主 README 明写"不提供内建
 TLS 或应用层鉴权"），宿主自己的 Host/Origin 栅栏只作用在它那条 `/api` 路由上。
 实测同一个跨站请求：宿主接口 403、插件接口 200，而这条路上挂着 `POST /update`
-（下载安装新版本）、`POST /host-accessibility`（改宿主启动快捷方式）等有副作用的端点。
+（下载安装新版本）等有副作用的端点（当时还有 `POST /host-accessibility` 改宿主启动
+快捷方式，已于 0.5.19 整条下线）。
 现在按参照实现 `Fisfzy/dsh-ego-browser` 补了三层栅栏（Host 必须回环 / POST 的 Origin
 必须同源 / POST 必须 application/json）+ 请求体上限。同期修掉两个"文档写着能用、
 实际必然失败"的功能（`x_desktop_type`/`x_desktop_key` 省略可选 `element`、`x_vision_describe`
@@ -115,6 +128,7 @@ UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 
 - 浏览器：`x_browser_tabs` / `x_browser_open` / `x_browser_read` / `x_browser_click` / `x_browser_fill` / `x_browser_press` / `x_browser_scroll` / `x_browser_shot` / `x_browser_wait` / `x_browser_close`
 - 桌面语义（零注入）：`x_desktop_apps` / `x_desktop_tree` / `x_desktop_press` / `x_desktop_value` / `x_desktop_scroll` / `x_desktop_launch`
 - 桌面物理（显式打扰，三重门控）：`x_desktop_mouse_click` / `x_desktop_type` / `x_desktop_key`
+- 桌面兜底（树不可用时）：`x_desktop_shot`（窗口级截图）/ `x_desktop_click_at`（窗口内坐标点击）
 - 视觉：`x_vision_describe`（截图 → 视觉模型 → 文字描述，给不支持图片输入的会话模型补眼睛；模型在设置页选，默认「系统推荐」）
 
 ### 本地开发
@@ -122,7 +136,7 @@ UI 面：**设置页「X-Agent操控」**（`settings.section`；无头模式 / 
 ```sh
 npm install            # 依赖（schemastery / playwright-core / koffi）
 npm test               # 宿主外冒烟测试（node --test）
-npm run verify:contract # 宿主契约验收（抽 app.asar 内真校验器判 22 个工具）
+npm run verify:contract # 宿主契约验收（抽 app.asar 内真校验器判 24 个工具）
 npm run verify:m1      # 浏览器控制面闭环验收（真实联网）
 npm run verify:m2      # 桌面语义控制闭环验收（启动 charmap 并清理）
 npm run verify:m3      # 门控 + skill + 物理输入闭环验收

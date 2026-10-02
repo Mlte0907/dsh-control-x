@@ -38,7 +38,7 @@ test('lib 下每个 .ps1 编码无歧义：带 UTF-8 BOM，或整个文件纯 AS
 
 test('lib 下每个 .ps1 通过官方 Parser 解析（0 错误）', { skip: process.platform !== 'win32' }, async () => {
   const files = listPs1(libDir);
-  assert.ok(files.length >= 2, '至少应覆盖 uia-helper.ps1 与 host-shortcuts.ps1');
+  assert.ok(files.length >= 2, '至少应包含 uia-helper.ps1 与 banner-overlay.ps1（host-shortcuts.ps1 已于 0.5.19 下线）');
   for (const file of files) {
     // 解析即完整语法检查，不执行任何语句（脚本本体是 stdin 死循环，不能真跑）。
     const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',

@@ -1,5 +1,131 @@
 # 更新日志
 
+## 0.5.19（2026-10-03）
+
+**下线「改宿主启动快捷方式加无障碍旗标」，代之以树/截图双路径。**
+
+起因是一条 0.5.13 加进来的功能现在站不住了。三条理由都是**实测**，不是推理：
+
+1. **旗标已无效**。`probe-flag-playwright.mjs` 在 playwright chromium-1246 上对比加与不加
+   `--force-renderer-accessibility`：**同一份树**，102 vs 103 元素，纯噪声。交叉印证：本机
+   Edge 152（Chromium 138+）默认就吐出 499 元素，现代 Chromium 早已默认开原生 UIA。
+2. **替代方案是闩锁，关不掉**。`SPI_SETSCREENREADER` 是本以为的"正规开关"，
+   `probe-spi-timing.mjs` 实测：开启后 13 → 187 元素，**关掉后仍 159**（而"从未开启"时只有 13）。
+   树一旦物化就常驻至进程退出——**用一次就永久生效**，与"按需开关"的语义正好相反，而且有副作用。
+3. **覆盖不全且留残留**。只改 `.lnk` 覆盖不到"开始菜单搜索 / 宿主自重启"等入口，安装器若新建
+   快捷方式就会出现两个。
+
+更重要的是**越界**：用户定的原则是「插件不应凌驾于宿主之上」。宿主能给的能力应当通过宿主
+获得，改宿主的启动方式不属于插件的职责。原先那条"唯一写宿主配置的功能"本身就是例外，例外
+一旦存在就会被当成先例。
+
+### 删除（整条功能下线，不是隐藏开关）
+
+| 删了什么 | 在哪 |
+|---|---|
+| 控制器实现 | `lib/core/host-accessibility.js` |
+| 改 `.lnk` 的脚本 | `lib/host-shortcuts.ps1` |
+| 它的测试 | `tests/host-accessibility.test.mjs` |
+| 两条 HTTP 路由 | `lib/browser/watch.js` 的 `GET/POST /host-accessibility` |
+| `WatchServer` 的第 6 个构造参数 | `lib/browser/watch.js` |
+| 构造调用 | `lib/index.js` 的 `createHostAccessibilityController` |
+| 设置页开关 | `lib/client.js` → 换成只读说明卡 `ElectronNotePanel` |
+
+留了两道**防复活**的门：`watch-guard.test.mjs` 里一条测试断言这四个端点真的返回 404
+（不留任何可写入口）；`degraded-fallback.test.mjs` 里一条测试扫描全 `lib/` 的代码，
+确保不再出现 `host-accessibility` / `SPI_SETSCREENREADER` / `.Save()` / `Arguments =`
+这类写启动配置的能力（注释里可以提这些名字解释为什么不做，代码里不行）。
+
+### 新增：树能用就用树，不能用就截图 + 坐标
+
+这就是 ZCode 的 `strategy:auto`（优先 a11y，回落 event/坐标）。它对应的前提也澄清过：
+**ZCode 本身不是"截图路线"**——它的 `include_screenshot` 默认 `false`，无障碍树是主干、
+截图仅兜底。本插件现在与之一致。
+
+**① `x_desktop_tree` 输出 `degraded`（对应 ZCode 的 `subrole` 语义）**
+
+ZCode 用 `subrole` 区分"可绑定的窗口"与"树没暴露的残留界面"。本插件用 `degraded` 做同一件事——
+让模型**机器可读地**知道这棵树不能当主干，而不是靠人去猜。
+
+```
+elementCount=13  namedCount=4   degraded=true
+degradedReason: 该窗口只暴露出 13 个元素（其中 4 个有名字），疑似 Electron/Chromium 内核
+未对外物化无障碍树。**语义动作（x_desktop_press / value / scroll）在此窗口基本不可用**。
+改用 x_desktop_shot 看图 + x_desktop_click_at 坐标点击（兜底路径，精度低于语义动作），
+或用 x_desktop_key / x_desktop_type 发按键。重试观察无用——这不是时序问题。
+```
+
+阈值 `DEGRADED_NAMED_MAX=8` / `DEGRADED_TOTAL_MIN=20`（`lib/desktop/manager.js`）用真机
+5 个数据点校准，任一命中即 degraded：
+
+| 窗口 | 元素 / 有名字 | degraded | 依据 |
+|---|---|---|---|
+| DSH 本体（Electron，首次观察） | 13 / 4 | true | 本轮会话最开头、任何实验之前的干净状态 |
+| DSH 本体（树已被物化后） | 163 / 142 | false | SPI 实验的闩锁效应仍在同一进程内 |
+| OpenCode（Electron） | 47~48 / 32~33 | false | |
+| Edge 152（Chromium） | 499 / 461 | false | |
+| playwright chromium-1246 极简页 | 39 / 18 | false | `probe-threshold.mjs`，四种组合加旗标全部 +0 元素 |
+
+阈值两侧都有足够宽的间隔（4↔33、13↔48）。**改动阈值必须同步改
+`tests/degraded-fallback.test.mjs` 的期望**——那条测试就是防止阈值漂移的。
+
+**② `x_desktop_shot`（窗口级截图）**
+
+helper 新增 `window_shot` 命令。用 `PrintWindow` + `PW_RENDERFULLCONTENT` 让目标窗口
+**自己**把内容画进我们给的 DC，因此**不受遮挡影响**——这比抓屏幕矩形（`CopyFromScreen`）
+强得多，后者被压住时拍到的是遮挡物。真机实测 DSH（Electron）在后台被别的窗口压着时
+仍取到完整画面：1965x1106、102 种颜色、0% 近黑。
+
+三处刻意设计：
+
+- **近黑帧判失败**（采样亮度 < 8 的像素占比 > 92%）。Electron 在某些状态下会返回纯黑帧，
+  那是"没有画面"不是"一个黑色的应用"——两者混为一谈会让模型得出完全错误的结论。
+- **严格绑定 observation**，不能凭 hwnd 截任意窗口（否则就成了通用截图器）。
+- **必须挂 `attachments` 服务**；没挂就如实报 `ACTION_UNAVAILABLE`，绝不静默返回空图。
+
+**③ `x_desktop_click_at`（纯坐标动作）**
+
+helper 新增 `window_rect` 命令。**它不解析任何元素**——这正是它在树空掉时唯一可用的原因，
+也是它与 `x_desktop_mouse_click`（坐标来自元素矩形，树空掉就没得用）的分水岭。
+
+- 坐标越界即拒，错误信息里点明"x/y 是窗口内坐标而非屏幕坐标"。
+- 过全套物理门控（空闲检测 + 审批 + 向用户明示），与 `x_desktop_mouse_click` 一致。
+- `render` 产出 `text` + `image` 两个块（对标 `x_browser_shot`），图片要真交给模型看。
+
+### 文案同步
+
+`lib/skill.js` 里那段"给用户加旗标"的指引整段重写。现在教模型的是：
+
+- `degraded` 时**必须在回复里告诉用户**「这个应用只能看图操作，精度较低」；
+- 能走语义动作就必须走语义动作，`x_desktop_click_at` 是最后手段；
+- **本插件不修改任何应用或宿主的启动配置**，Electron 应用只能看图操作属预期行为，
+  不要试图替用户改启动方式来"解决"它。
+
+### 验证
+
+- `npm test` **126/126**（115 − 3 条已删功能的测试 + 14 条新增）
+- `npm run verify:contract` **24/24**（抽 `app.asar` 内宿主真校验器判全部工具的 output schema）
+- 真机端到端（`probe-e2e-degraded.mjs`，真实 DSH 窗口，只观察与取证未点击）：
+  `degraded` 判定 ✅、宿主真校验 ✅、真实 JPEG 33904 字节且 base64 长度与 `bytes` 字段一致 ✅、
+  `render` 产出 2 个块 ✅、降采样换算（1965→1280，系数 x1.535）✅、OpenCode 对照组
+  `degraded=false` ✅
+
+### 踩到的坑（写给下一个人）
+
+- **`Add-Type` 会按 ANSI 解码临时 `.cs`**：`uia-helper.ps1` 里那段 C# 必须**纯 ASCII**
+  （注释也用英文），中文注释的字节会被当代码，报"无效的表达式项"。中文说明写在 PS 侧注释里。
+  `lib/banner-overlay.ps1` 早已刻意纯 ASCII 规避同一类坑。
+- **`degradedReason` 不 degraded 时必须给空串，不能 `undefined`**：宿主在 schema 校验之前先做
+  无损 JSON 快照，嵌套 `undefined` 整单拒绝（0.5.9 的 `x_status` 事故，同一个坑）。
+- **`skill.js` 的 `content` 是模板字符串**：里面写反引号包工具名会把字符串截断
+  （`SyntaxError: Unexpected identifier`）。
+
+### 环境还原
+
+本轮 SPI 实验的副作用已核验还原：两个快捷方式 `args=''`（干净）、`SPI_SETSCREENREADER` 已关、
+泄漏临时目录清零。**唯一残留无法还原**：当前这个 DSH 进程的树已被物化（闩锁），
+重启 DSH 后自然恢复 13/4。
+
 ## 0.5.18（2026-10-02）
 
 代码审查修复批次。起因是一次全量审查，参考了五个同类项目

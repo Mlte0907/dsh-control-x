@@ -12,7 +12,7 @@
  *     GET /api/x-control/config  → 200   ← 插件放行
  *
  * 而这条无鉴权的路上挂着有副作用的端点：POST /update（下载安装新版本）、
- * POST /host-accessibility（改宿主启动快捷方式）、POST /clear-data（清 Cookie）、
+ * POST /host-accessibility（已于 0.5.19 下线，见 watch.js 注释）、POST /clear-data（清 Cookie）、
  * POST /input（点击打字）、POST /login-window（拉起有头浏览器）。
  *
  * 参照实现：Fisfzy/dsh-ego-browser（同代、同宿主、同架构的唯一同类）做了四件事，
@@ -49,8 +49,9 @@ function mount(extra = {}) {
     check: async () => { m.calls.push('update:check'); return { status: 'idle' }; },
     startApply: () => { m.calls.push('update:apply'); return { status: 'working' }; },
   };
-  // WatchServer(manager, activity, listVisionModels, banner, updater, hostAccessibility)
-  const ws = new WatchServer(m, null, null, null, updater, extra.hostAccessibility);
+  // WatchServer(manager, activity, listVisionModels, banner, updater)
+  // hostAccessibility 参数已于 0.5.19 随「改宿主启动快捷方式」功能一起下线。
+  const ws = new WatchServer(m, null, null, null, updater);
   ws.attach({ register: (r) => { route = r; } });
   return { route, m };
 }
@@ -123,7 +124,6 @@ test('端到端：恶意跨站请求打不动任何有副作用的端点', async
   };
   const targets = [
     ['POST', '/update', { action: 'apply' }],
-    ['POST', '/host-accessibility', { enabled: true }],
     ['POST', '/clear-data', { mode: 'all' }],
     ['POST', '/input', { tab: 't1', type: 'click', x: 1, y: 1 }],
     ['POST', '/login-window', { url: 'https://attacker.example' }],
@@ -143,20 +143,27 @@ test('端到端：恶意跨站请求打不动任何有副作用的端点', async
 
 test('端到端：同源合法客户端照常可用（栅栏不能把面板自己锁死）', async () => {
   const { callRoute } = await import('./helpers.mjs');
-  const calls = [];
-  const acc = {
-    detect: async () => { calls.push('detect'); return { ok: true, shortcuts: [], errors: [] }; },
-    set: async (e) => { calls.push(`set:${e}`); return { ok: true, shortcuts: [], errors: [] }; },
-  };
-  const { route, m } = mount({ hostAccessibility: acc });
+  const { route, m } = mount();
   assert.equal((await callRoute(route, 'GET', '/tabs')).status, 200);
   assert.equal((await callRoute(route, 'POST', '/update', { action: 'check' })).status, 200);
-  assert.equal((await callRoute(route, 'POST', '/host-accessibility', { enabled: true })).status, 200);
   assert.deepEqual(m.calls, ['listTabs', 'update:check']);
-  assert.deepEqual(calls, ['set:true'], '同源 POST 真的转到了控制器（detect 只在 GET 时调）');
   // 只读端点也要通，且不带 Origin（浏览器 GET 不带 Origin）
-  assert.equal((await callRoute(route, 'GET', '/host-accessibility')).status, 200);
-  assert.deepEqual(calls, ['set:true', 'detect']);
+  assert.equal((await callRoute(route, 'GET', '/activity')).status, 200);
+});
+
+test('已下线的端点必须真的 404（不留任何可写入口）', async () => {
+  const { callRoute } = await import('./helpers.mjs');
+  const { route } = mount();
+  // /host-accessibility 曾是写宿主启动快捷方式的入口，0.5.19 整条下线。
+  for (const [method, path, body] of [
+    ['GET', '/host-accessibility', undefined],
+    ['POST', '/host-accessibility', { enabled: true }],
+    ['GET', '/config', undefined],
+    ['POST', '/config', { browserEnabled: false }],
+  ]) {
+    const res = await callRoute(route, method, path, body);
+    assert.equal(res.status, 404, `${method} ${path} 必须 404，而不是留一个可用入口`);
+  }
 });
 
 test('请求体有硬上限（不设上限则任意本地页面能把宿主内存吃光）', async () => {

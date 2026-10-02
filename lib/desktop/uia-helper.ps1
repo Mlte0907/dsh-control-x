@@ -17,7 +17,95 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 try { [Console]::InputEncoding = $utf8 } catch {}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Drawing
 Add-Type -Namespace XNative -Name Foreground -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
+
+# 窗口级截图（2026-10-03）。PrintWindow 让目标窗口自己把内容画进我们给的 DC，
+# 因此**不受遮挡影响**——实测 DSH（Electron）在后台被别的窗口压着时仍取到完整画面
+# （1965x1106、102 种颜色、0% 近黑）。这比抓屏幕矩形（CopyFromScreen）强：后者被遮挡
+# 时拍到的是遮挡物。
+#
+# 为什么需要它：Electron/Chromium 应用默认不对外物化 UIA 树（DSH 实测只有 13 个元素、
+# 4 个有名字），语义动作 x_desktop_press/value/scroll 全都用不了。此时"看图 + 坐标点击"
+# 是唯一不越界的兜底路径——对应 ZCode 的 strategy:auto（优先 a11y，回落 event/坐标）。
+#
+# ⚠️ 下面这个 C# 块**必须纯 ASCII**（注释也用英文）。原因：Add-Type 会把 here-string
+# 写成临时 .cs 再交给编译器，那一步按 ANSI 解码——中文注释的字节会被当成代码，
+# 报"无效的表达式项"（2026-10-03 实测踩过）。lib/banner-overlay.ps1 早已刻意纯 ASCII
+# 规避同一类坑，这里保持一致。中文说明放在本段 PS 注释里。
+$src = @'
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+namespace XNative {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  public class Shot {
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+    // Returns JPEG bytes, or null when the window cannot be captured.
+    public static byte[] Capture(int hwndInt, int maxEdge, int quality) {
+      RECT r;
+      if (!GetWindowRect(new IntPtr(hwndInt), out r)) return null;
+      int w = r.R - r.L, h = r.B - r.T;
+      if (w <= 0 || h <= 0) return null;
+      // Downscale huge windows so one 4K desktop shot cannot eat the context.
+      int scale = 1;
+      int longEdge = (w > h) ? w : h;
+      if (longEdge > maxEdge) scale = (int)Math.Ceiling(longEdge / (double)maxEdge);
+      Bitmap bmp;
+      using (var full = new Bitmap(w, h, PixelFormat.Format24bppRgb)) {
+        using (var g = Graphics.FromImage(full)) {
+          IntPtr hdc = g.GetHdc();
+          bool ok = PrintWindow(new IntPtr(hwndInt), hdc, 2);   // 2 = PW_RENDERFULLCONTENT
+          g.ReleaseHdc(hdc);
+          if (!ok) return null;
+        }
+        // Near-black guard: Electron can hand back an all-black frame. That is
+        // "no picture", not "a black app", and the two must not be conflated.
+        long black = 0, n = 0;
+        for (int y = 0; y < h; y += 11) {
+          for (int x = 0; x < w; x += 11) {
+            Color c = full.GetPixel(x, y);
+            int lum = (c.R * 299 + c.G * 587 + c.B * 114) / 1000;
+            if (lum < 8) black++;
+            n++;
+          }
+        }
+        if (n > 0 && black * 100 / n > 92) return null;
+        if (scale <= 1) {
+          bmp = new Bitmap(full);
+        } else {
+          bmp = new Bitmap(Math.Max(1, w / scale), Math.Max(1, h / scale));
+          using (var g2 = Graphics.FromImage(bmp)) {
+            g2.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g2.DrawImage(full, 0, 0, bmp.Width, bmp.Height);
+          }
+        }
+      }
+      try {
+        using (var ms = new System.IO.MemoryStream()) {
+          foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders()) {
+            if (c.FormatID != System.Drawing.Imaging.ImageFormat.Jpeg.Guid) continue;
+            var p = new EncoderParameters(1);
+            p.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
+            bmp.Save(ms, c, p);
+            break;
+          }
+          byte[] bytes = ms.ToArray();
+          return bytes.Length > 0 ? bytes : null;
+        }
+      } finally { bmp.Dispose(); }
+    }
+    public static int RectW(int hwndInt) { RECT r; return GetWindowRect(new IntPtr(hwndInt), out r) ? (r.R - r.L) : 0; }
+    public static int RectH(int hwndInt) { RECT r; return GetWindowRect(new IntPtr(hwndInt), out r) ? (r.B - r.T) : 0; }
+    public static int RectX(int hwndInt) { RECT r; return GetWindowRect(new IntPtr(hwndInt), out r) ? r.L : 0; }
+    public static int RectY(int hwndInt) { RECT r; return GetWindowRect(new IntPtr(hwndInt), out r) ? r.T : 0; }
+  }
+}
+'@
+Add-Type -TypeDefinition $src -ReferencedAssemblies 'System.Drawing'
 
 # 带错误码的异常，让 Node 侧拿到结构化错误（类定义必须在任何使用之前）。
 class XControlException : System.Exception {
@@ -284,6 +372,47 @@ try {
             Out-Result @{
                 element = @{ x = [int]$r.X; y = [int]$r.Y; width = [int]$r.Width; height = [int]$r.Height; clickX = $cx; clickY = $cy }
                 window = @{ pid = $nc.ProcessId; title = $nc.Name; hwnd = [int64]$nc.NativeWindowHandle; foreground = ($fg -eq [System.IntPtr]$nc.NativeWindowHandle) }
+            }
+        }
+        'window_rect' {
+            # 纯坐标动作（x_desktop_click_at）的前置取证：窗口矩形 + 是否前台。
+            # 只读；不解析任何元素——这正是它在树空掉时唯一可用的原因。
+            $win = Resolve-Window $req
+            $hwnd = [int64]$win.Current.NativeWindowHandle
+            $fg = [XNative.Foreground]::GetForegroundWindow()
+            Out-Result @{
+                window = @{
+                    pid = $win.Current.ProcessId; title = $win.Current.Name
+                    hwnd = $hwnd
+                    x = [XNative.Shot]::RectX([int]$hwnd); y = [XNative.Shot]::RectY([int]$hwnd)
+                    width = [XNative.Shot]::RectW([int]$hwnd); height = [XNative.Shot]::RectH([int]$hwnd)
+                    foreground = ($fg -eq [System.IntPtr]$hwnd)
+                }
+            }
+        }
+        'window_shot' {
+            # 窗口级截图（x_desktop_shot）。PrintWindow 让窗口自己画，不受遮挡影响。
+            $win = Resolve-Window $req
+            $nc = $win.Current
+            $hwnd = [int64]$nc.NativeWindowHandle
+            $maxEdge = 1280
+            if ($null -ne $req.maxEdge) { $maxEdge = [int]$req.maxEdge }
+            $quality = 70
+            if ($null -ne $req.quality) { $quality = [int]$req.quality }
+            $bytes = [XNative.Shot]::Capture([int]$hwnd, $maxEdge, $quality)
+            if ($null -eq $bytes) {
+                throw [XControlException]::new('STALE_STATE', '窗口截图失败：PrintWindow 返回空，或画面几乎全黑（该窗口可能最小化、离屏、或渲染进程未就绪）。请确认窗口可见后重试；不要据此假设界面为空。')
+            }
+            $fg = [XNative.Foreground]::GetForegroundWindow()
+            Out-Result @{
+                imageBase64 = [Convert]::ToBase64String($bytes)
+                bytes = $bytes.Length
+                window = @{
+                    pid = $nc.ProcessId; title = $nc.Name; hwnd = $hwnd
+                    x = [XNative.Shot]::RectX([int]$hwnd); y = [XNative.Shot]::RectY([int]$hwnd)
+                    width = [XNative.Shot]::RectW([int]$hwnd); height = [XNative.Shot]::RectH([int]$hwnd)
+                    foreground = ($fg -eq [System.IntPtr]$hwnd)
+                }
             }
         }
         'scroll' {            $win = Resolve-Window $req

@@ -159,7 +159,8 @@ const EXPECTED = [
   'x_browser_tabs', 'x_browser_open', 'x_browser_read', 'x_browser_click', 'x_browser_fill',
   'x_browser_press', 'x_browser_scroll', 'x_browser_shot', 'x_browser_wait', 'x_browser_close',
   'x_desktop_apps', 'x_desktop_tree', 'x_desktop_press', 'x_desktop_value', 'x_desktop_scroll',
-  'x_desktop_launch', 'x_desktop_mouse_click', 'x_desktop_type', 'x_desktop_key',
+  'x_desktop_launch', 'x_desktop_shot', 'x_desktop_click_at',
+  'x_desktop_mouse_click', 'x_desktop_type', 'x_desktop_key',
   'x_vision_describe',
 ];
 assert(accepted.length === EXPECTED.length, `注册工具总数 = ${accepted.length}（期望 ${EXPECTED.length}）`);
