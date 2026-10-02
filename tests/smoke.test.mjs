@@ -176,6 +176,32 @@ test('总开关门控：browserEnabled/desktopEnabled 关闭后工具拒绝执�
   config.desktopEnabled = true;
 });
 
+test('所有工具的 parameters 根必须显式 type:object（DeepSeek API 硬校验，缺了整请求 HTTP 400）', async (t) => {
+  const { ctx, registered, dispose } = makeMockCtx();
+  t.after(dispose);
+  apply(ctx, {});
+  assert.ok(registered.size >= 22, 'eagerRegister 下应注册全部工具');
+  const bad = [];
+  for (const [name, tool] of registered) {
+    if (tool.parameters?.type !== 'object') bad.push(name);
+  }
+  assert.deepEqual(bad, [], `这些工具的入参根缺 type:object（0.5.16 实测 x_activate 等三处，DeepSeek 官方 API 整请求 400）：${bad.join(', ')}`);
+});
+
+test('defineXTool 对缺 type 的入参根做边界兜底注入（防再犯）', async () => {
+  const { defineXTool } = await import('../lib/core/tool.js');
+  const tool = defineXTool({
+    name: 'x_no_type',
+    description: 'test',
+    parameters: {},
+    outputSchema: { type: 'object', properties: {} },
+    render: () => [{ type: 'text', text: '' }],
+    execute: async () => ({ ok: true }),
+  });
+  assert.equal(tool.parameters.type, 'object', '空对象根被兜底注入 type:object');
+  assert.deepEqual(tool.parameters.properties, {});
+});
+
 test('control-x skill 满足宿主 dsh-skill 的 validateDefinition 契约', async () => {
   const { CONTROL_X_SKILL } = await import('../lib/skill.js');
   // 宿主校验（dsh-skill/lib/index.js）：name 符合 kebab-case、description 非空、

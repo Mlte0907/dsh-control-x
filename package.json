@@ -1,6 +1,6 @@
 {
   "name": "dsh-control-x",
-  "version": "0.5.16",
+  "version": "0.5.17",
   "description": "DSH 插件：为 Agent 提供浏览器（headless CDP）与本机桌面（UIA/SendInput）的统一控制面，先观察后动作、不打扰用户。",
   "type": "module",
   "main": "./lib/index.js",

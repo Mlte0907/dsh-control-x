@@ -1,5 +1,26 @@
 # 更新日志
 
+## 0.5.17（2026-10-02）
+
+**修复：DeepSeek 官方 API 模型下整会话 HTTP 400——三个无参工具的入参根缺 `type: "object"`。**
+
+### 根因（真机定位，真机证据）
+
+`x_activate` / `x_browser_tabs` / `x_desktop_apps` 三个无参工具把 `parameters` 写成了
+**空对象 `{}`**——根节点没有 `type`。DeepSeek 官方 API 对请求里每个 function 的
+parameters 根做硬校验，缺 type 报 `got 'type: null'`（HTTP 400）；eagerRegister 下
+这三个工具全程在场，**等于 DeepSeek 模型的整个会话废掉**。MiniMax / mimo 等接口
+不做这项校验，所以 0.5.16 前从未暴露——又一次"换了观测面才看得见的缺陷"。
+
+### 修复（两层）
+
+- 三处显式补齐 `parameters: { type: 'object', properties: {} }`；
+- `defineXTool` 边界兜底：入参根缺 `type`（且无 `oneOf`）时自动注入 `type: 'object'`
+  ——这个类别的错误从此到不了宿主（0.3.1"注册边界统一规范化"的同款纪律）。
+- 新增审计测试：遍历全部工具断言入参根 `type: 'object'`；`defineXTool` 兜底行为单测。
+- 测试 99/99；verify:contract 22/22（宿主真校验器对入参根的要求本就含此项，此前
+  契约门只挡"DSL 误用"，没挡"空对象根"——审计测试补上了这个盲区）。
+
 ## 0.5.16（2026-10-02）
 
 **紧急修复：0.5.14/0.5.15 的桌面层完全瘫痪（uia-helper.ps1 语法错误），并补上一直缺失的 .ps1 语法门。**
