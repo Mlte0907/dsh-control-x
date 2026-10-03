@@ -1,5 +1,84 @@
 # 更新日志
 
+## 0.5.33（2026-10-04）
+
+**取景框按用户实测反馈调温和；`x_desktop_launch` 终于会自己按名字找应用（4/4 必撞的缺口）。**
+
+### 一、取景框：用户原话 → 四处改动
+
+> 「蓝了，然后好像比豆包的框大了一点，闪了一下，能更优雅一点么？温和一点。」
+
+| 反馈 | 改动 |
+|---|---|
+| 「比窗口大了一点」 | **不再外扩**。旧版向外扩 4px（为了"别被截进图里"），但 `shotFlash` 是在 `windowShot` **返回之后**才触发、捕获早已完成 → 现在直接贴着窗口矩形画，尺寸精确 |
+| 「蓝了」「闪了一下」 | 线宽 4px → **2px**，透明度 0.95 → **0.7**，**圆角 6px** |
+| 「生硬」 | 350ms 一上来就衰减 → **420ms，先停 120ms 再淡出** |
+| 防复发 | 新增几何门（源码断言）：不许再外扩、`Thickness=2`、`Hold=120`、`Ms=420`、圆角 |
+
+### 二、`x_desktop_launch`：0.5.32 四个会话 4/4 全撞的缺口
+
+```
+x_desktop_launch {"target":"豆包"} → Error: The system cannot find the file specified
+```
+四个模型各自自救、各烧 1~3 步：M3 改 `target:"Doubao"`；space-bunny 翻开始菜单；deepseek-flash 从 lnk 解出 `D:\doubao\Doubao.exe`；mimo 翻桌面 `豆包.lnk`。
+根因：helper 只把 target 丢给 `Start-Process`，**不查快捷方式 / App Paths / PATH**。
+
+**新增 `lib/launch-resolve.ps1`**（单独成文件——helper 是常驻 stdin 循环，测试没法 dot-source 它）：
+
+解析顺序：完整路径 → 开始菜单（用户+公共）与桌面快捷方式（**先按快捷方式文件名，再按它指向的 exe 名**）→ 注册表 App Paths（HKCU/HKLM/WOW6432）→ PATH。
+
+找不到时抛 `APP_NOT_FOUND` 并**列出已尝试过哪些地方**——替代 .NET 那句无方向的
+"The system cannot find the file specified"。工具描述同步，告诉模型"名字会自己去找"。
+
+**真机验证**：
+
+| 传入 | 结果 |
+|---|---|
+| `豆包` | `…\Start Menu\Programs\豆包.lnk` ✅（4/4 失败的正是这条） |
+| `Doubao` / `doubao` | 同上 ✅——经快捷方式**指向的 exe 名**匹配，M3 那招自救已内置 |
+| `Notepad` | WindowsApps `Notepad.exe` ✅（PATH 兜底） |
+| 不存在的名字（走完整 helper 协议） | **3.9s** 返回 `APP_NOT_FOUND` + 已尝试清单，中文完整 |
+
+未做：真启动一次豆包的端到端（会在你屏幕上开窗）。`Start-Process <lnk>` 这一半早被 0.5.32
+三个会话的自救路径实证过，两端合起来风险很低——下一轮真机测试即验收。
+
+### 三、这轮在 `.ps1` 上连踩三个坑（**全部被 `ps-scripts` 门抓住**）
+
+1. 把 JSDoc 的 `/** … */` 写进 `.ps1`——**PowerShell 没有这种注释**，解析全炸；
+2. 中文注释**没带 UTF-8 BOM** → PS5.1 按 ANSI 解码，中文字节被解出一个**假的注释结束符**，
+   把头部注释提前闭合（`launch-resolve` 真实踩到）；
+3. 我在 `shot-frame` 的注释里**字面写出那个结束符**当反面教材 → 又炸一次（自己踩自己）。
+   已改成"hash-gt"字面描述 + 给该文件补 BOM。
+
+另两个协议事实（写进测试注释，免得下次再耗时间）：
+- 测试用 `-Command` 传中文会被 PS5.1 按**控制台代码页**解码 → 改用 `-EncodedCommand`（UTF-16 base64）
+  并在脚本开头强制 `[Console]::OutputEncoding` 为 UTF-8；
+- helper 用的是 `[Console]::In.ReadToEnd()` —— **必须关掉 stdin 它才会开始处理**，否则一直等 EOF。
+
+### 四、门（先红后绿）
+
+- `launch-resolve` 6 条：文件名匹配 / 目标 exe 名匹配 / 已是路径原样返回 / 找不到返回 null /
+  PATH 兜底 / **helper 真的 dot-source 了它并调用**（源码门）；
+- `shot-frame` 几何门 + 真跑 `exit 0` 门；
+- `ps-scripts`：Parser + 编码门（本轮全靠它连抓三次）。
+
+### 五、参考项目扫描（用户点名的两个字节项目）
+
+- **UI-TARS**（Seed，11.6k star）：是**模型 + 动作解析器**（`pip install ui-tars`），不是框架。
+  动作形如 `Action: click(start_box='(100,200)')`，坐标在 **factor=1000 的归一化空间**，
+  靠 `parse_action_to_structure_output(..., origin_resized_width/height)` 换算回绝对像素；
+  提示模板三套：`COMPUTER_USE` / `MOBILE_USE` / `GROUNDING`（只出动作不出思考）。
+  README 自陈局限含**幻觉、误认 GUI 元素**——正是我们"先观察后动作 + 重新验证"在防的。
+  对照自查：它把**参考分辨率**显式带进每次换算；我们 `x_desktop_shot` 的返回里
+  `window.width/height` 与 `image.width/height` 都在（降采样比可直接算），**这块不需要补**。
+- **UI-TARS-desktop**（TARS 桌面端）：Electron 原生 GUI agent，README Features 明列
+  **"Real-time feedback and status display"**、截图+视觉识别、跨平台、**本地私有**，
+  另有 local/remote operator 与 UI TARS SDK。
+  对照自查：它的"实时状态显示"≈我们的 横幅 + 取景框（本轮刚按反馈调温和）。
+  **如实说明**：我只读了它的 README/docs，**没翻源码**，所以它高亮框的具体实现我没有证据，
+  不声称可复刻；路子也不同——它是"每步截图 → 模型出坐标"的专职 GUI 模型，
+  我们是"语义树优先、截图兜底"（本轮 mimo **0 张截图**跑完全程即证据）。
+
 ## 0.5.32（2026-10-03）
 
 **截图取景框：截图时在目标窗口外缘闪一下，告诉用户「刚截的是这里」。**

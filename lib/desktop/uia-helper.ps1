@@ -20,6 +20,14 @@ Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing
 Add-Type -Namespace XNative -Name Foreground -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();'
 
+# 按应用名解析启动目标（0.5.33）。单独成 lib/launch-resolve.ps1 是因为它只有函数、
+# 而本文件是常驻 stdin 循环——测试没法 dot-source 本文件，只能 dot-source 它。
+# 真机 0.5.32 的四个会话（四个不同模型）4/4 撞
+#   x_desktop_launch {"target":"豆包"} → The system cannot find the file specified
+# 因为这里只把 target 丢给 Start-Process，不查开始菜单/桌面快捷方式/App Paths/PATH；
+# 四家各自花 1~3 步自救（改进程名 / 翻开始菜单 / 解 lnk / 翻桌面）——那是工具该干的活。
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'launch-resolve.ps1')
+
 # 窗口级截图（2026-10-03）。PrintWindow 让目标窗口自己把内容画进我们给的 DC，
 # 因此**不受遮挡影响**——实测 DSH（Electron）在后台被别的窗口压着时仍取到完整画面
 # （1965x1106、102 种颜色、0% 近黑）。这比抓屏幕矩形（CopyFromScreen）强：后者被遮挡
@@ -441,17 +449,32 @@ try {
                 foreach ($w in (Get-TopWindows)) { $before[[string]$w.hwnd] = $true }
             } catch { }
             $targetPath = '' + $req.target
-            if ($targetPath.ToLower().EndsWith('.lnk')) {
+            # 名字解析（0.5.33）：不是路径就按「快捷方式文件名 → 快捷方式指向的 exe 名 →
+            # 注册表 App Paths → PATH」找；找不到则给出"已尝试过哪些地方"的可自救报错，
+            # 而不是把 .NET 那句 "The system cannot find the file specified" 原样甩给模型。
+            $isUrl = ($targetPath -match '^[a-zA-Z][a-zA-Z0-9+.\-]*://')
+            $launchTarget = $targetPath
+            if (-not $isUrl) {
+                $resolved = $null
+                try { $resolved = Resolve-CxLaunchTarget -Target $targetPath } catch { }
+                if ($resolved) {
+                    $launchTarget = $resolved
+                } elseif (-not (Test-Path -LiteralPath $targetPath)) {
+                    throw [XControlException]::new('APP_NOT_FOUND',
+                        "按名字找不到可启动的应用「$targetPath」。已尝试：完整路径、开始菜单（用户+公共）与桌面的快捷方式、注册表 App Paths、PATH。请改用 .lnk 或 exe 的完整路径，或先用 pwsh 找到它再启动。")
+                }
+            }
+            if ($launchTarget.ToLower().EndsWith('.lnk')) {
                 try {
                     $shLocal = New-Object -ComObject WScript.Shell
-                    $tl = $shLocal.CreateShortcut($targetPath)
+                    $tl = $shLocal.CreateShortcut($launchTarget)
                     if ($tl.TargetPath) { $targetPath = '' + $tl.TargetPath }
                 } catch { }
             }
             $nameKey = ''
             try { $nameKey = [System.IO.Path]::GetFileNameWithoutExtension($targetPath).ToLower() } catch { }
-            $p = if ($req.args) { Start-Process -FilePath $req.target -ArgumentList $req.args -PassThru }
-                 else          { Start-Process -FilePath $req.target -PassThru }
+            $p = if ($req.args) { Start-Process -FilePath $launchTarget -ArgumentList $req.args -PassThru }
+                 else          { Start-Process -FilePath $launchTarget -PassThru }
             $launchPid = $p.Id
             $window = $null
             $matched = ''

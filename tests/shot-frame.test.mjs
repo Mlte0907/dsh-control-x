@@ -18,6 +18,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { buildDesktopTools } from '../lib/desktop/tools.js';
 import { createShotFlash } from '../lib/shot-frame.js';
 
@@ -94,6 +95,20 @@ test('shot-frame.ps1 真跑一次必须 exit 0（语法门查不出运行时错�
   ], { timeout: 20000, windowsHide: true });
   assert.equal(stderr.trim(), '', `stderr 非空（脚本内部报错）：${stderr}`);
   assert.equal(stdout.trim(), '', `stdout 非空：${stdout}`);
+});
+
+test('shot-frame.ps1 必须贴合目标窗口且更温和（用户 2026-10-04 实测反馈）', () => {
+  // 用户原话：「蓝了，然后好像比豆包的框大了一点，闪了一下，能更优雅一点么？温和一点。」
+  // "大了一点" 的来源就是我原先的**向外外扩 4px**；捕获在 shotFlash 触发**之前**就已完成，
+  // 所以现在可以贴着窗口画，不必再为"别截进图里"而外扩。
+  const src = readFileSync(new URL('../lib/shot-frame.ps1', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /\$script:Left\s*=\s*\$X\s*-/,
+    '不得再向外外扩——那正是"比窗口大了一点"的来源');
+  assert.match(src, /\$script:Left\s*=\s*\$X\b/, '框必须贴在窗口左上角');
+  assert.match(src, /\$script:Width\s*=\s*\$W\b/, '宽度必须等于窗口宽度（不加边）');
+  assert.match(src, /\[int\]\$Thickness = 2/, '线宽 2px：4px 太重，用户要"温和"');
+  assert.match(src, /\[int\]\$Hold = 120/, '先停 120ms 再淡出：一上来就衰减会显得"闪一下"很生硬');
+  assert.match(src, /\[int\]\$Ms = 420/, '总时长 420ms：350ms 偏急');
 });
 
 test('createShotFlash：同步 spawn、参数正确、失败静默不外抛', () => {
