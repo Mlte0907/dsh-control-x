@@ -157,6 +157,44 @@ test('自动回退：某个候选抛错不阻断后面的候选，且宿主错�
   assert.match(r.attempts[0].error, /route exploded/, '宿主错误不许吞掉');
 });
 
+test('回归：宿主 stream 是「async 函数返回 generator」，循环体带 break 也不能废（0.5.24 踩过）', async () => {
+  // 2026-10-03 真实事故，也是「越修越不行」的直接原因。
+  //
+  // 宿主 llm.stream 是 `async 函数返回 generator`（即 Promise<AsyncGenerator>）。
+  // 原写法 `for await (const chunk of llm.stream(...))` 在**没有 break** 时能跑——
+  // for-await 会自动解包 Promise。但 0.5.24 为检测宿主错误 chunk 而在循环体里加了
+  // **break** 之后，V8 不再解包那个 Promise，直接把 Promise 当迭代器，于是每一次真实
+  // 调用都抛：
+  //   llm.stream(...) is not a function or its return value is not async iterable
+  // 表现是「视觉通道彻底不通」，而报错字面意思完全指错方向（看着像宿主返回了布尔值，
+  // 实际上没人返回过布尔值，是我们自己把 Promise 用废了）。
+  //
+  // 修法：先 `const stream = await llm.stream(...)` 显式解包，再 for-await 遍历它。
+  const mk = () => {
+    const llm = {
+      stream: async () => (async function* () {
+        yield delta('看图结果');
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      })(),
+    };
+    return llm;
+  };
+  const r = await describeImage({ llm: mk(), target: { provider: 'p', model: 'm' }, attachment: ATT });
+  assert.equal(r.text, '看图结果', 'async 函数返回 generator 的形态必须能正常读到文本');
+
+  // 带 break 的那条路径也要能通：宿主失败 chunk 必须被识别并抛出，而不是把 Promise 走废
+  const failing = {
+    stream: async () => (async function* () {
+      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'boom', code: 'X' } } };
+    })(),
+  };
+  await assert.rejects(
+    () => describeImage({ llm: failing, target: { provider: 'p', model: 'm' }, attachment: ATT }),
+    (e) => /boom/.test(e.message),
+    '循环体带 break 时也必须走通（先 await 解包），并正确识别失败 chunk',
+  );
+});
+
 test('回归：宿主把适配器失败包成 finish chunk，不抛异常——不得再报成"返回空"', async () => {
   // 2026-10-03 真实事故。用户故意用只吃文本的模型（aiio/MiniMax-M3）压测：
   // Agent 调 x_vision_describe，**三个候选全部表现为"返回空"**，于是结论一度变成

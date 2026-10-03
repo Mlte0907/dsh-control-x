@@ -1,5 +1,57 @@
 # 更新日志
 
+## 0.5.27（2026-10-03）
+
+**修复 0.5.24 亲手引入的致命 bug——视觉通道从那次改动起就完全不通了。**
+
+这就是用户说的「越修越不行」的直接原因。
+
+### 根因：`for await` 循环体里加 `break`，V8 就不再解包 Promise
+
+宿主 `llm.stream()` 的真实形态是 **`async` 函数返回 generator**（即
+`Promise<AsyncGenerator>`）。原写法：
+
+```js
+for await (const chunk of llm.stream({...})) {
+  // 没有 break —— 能跑，for-await 会自动解包 Promise
+}
+```
+
+0.5.24 为检测宿主错误 chunk，在循环体里加了 **`break`**。**加了 break 之后 V8 不再解包
+那个 Promise**，直接把 `Promise` 当迭代器用，于是**每一次真实调用都抛**：
+
+```
+llm.stream(...) is not a function or its return value is not async iterable
+```
+
+**修法**：先 `const stream = await llm.stream(...)` 显式解包，再 `for await (const chunk of stream)`。
+解包之后 break 就没问题了。
+
+### 我走的两个弯路（都记下来）
+
+**① 顺着报错字面意思查了两轮。** 那句 `boolean true is not iterable` 让我以为「宿主返回了
+布尔值」，于是一路追查宿主哪个函数会返回 `true`。**实际上根本没人返回过布尔值**——
+是我自己的代码把 Promise 用废了。报错字面意思完全指错了方向。
+
+**② 找到抛出点就当成根因。** 我搜到宿主 `client.excel.js` 里有
+`typeof iterable + " is not iterable"` 这句，就下结论「是宿主 Excel 预览的错，跟视觉
+链路无关」。**找到抛出点不等于找到调用点**——那句拼出来的报错文本只是长得像，实际
+来源是另一回事。我在没有任何证据的情况下否定了自己的嫌疑。
+
+**代价**：用户在 0.5.25 / 0.5.26 两次真实压测里看到的视觉失败，一直是这一个 bug，
+而我却在同期又加了别的改动，让「越改越不行」的感觉雪上加霜。
+
+### 新增测试
+
+- `回归：宿主 stream 是「async 函数返回 generator」，循环体带 break 也不能废`
+  ——直接用宿主真实形态（async 函数返回 generator）做桩，同时验证
+  「正常文本能读到」与「失败 chunk 能被识别并抛出」两条路径。
+- **门的有效性已实测**：去掉显式 `await` 退回旧写法后，该测试立刻失败并报出
+  `llm.stream(...) is not a function or its return value is not async iterable`，
+  与真机报错一字不差。
+
+验证：`npm test` **157/157**（156 + 1）、`npm run verify:contract` **24/24**。
+
 ## 0.5.26（2026-10-03）
 
 **撤掉我此前加进 skill 的处方式死规则。只陈述工具事实，不给「遇 X 做 Y」的处方。**
