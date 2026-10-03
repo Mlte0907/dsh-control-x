@@ -35,7 +35,7 @@ async function allTools() {
   };
 }
 
-test('默认启动即注册全部 24 个工具（运行期注册到不了模型面前）', async (t) => {
+test('默认启动即注册全部 25 个工具（运行期注册到不了模型面前）', async (t) => {
   const atBoot = new Map();
   const disposers = [];
   apply({
@@ -47,12 +47,12 @@ test('默认启动即注册全部 24 个工具（运行期注册到不了模型�
   // 2026-10-02 实测：只在 x_activate 之后注册的话，宿主侧注册成功（toolCount=20）
   // 但模型这一侧的工具表里始终没有它们，重启与新开会话都试过。
   // 所以默认必须启动即注册，否则等于注册了个寂寞。
-  assert.equal(atBoot.size, 24, 'apply() 启动时就注册全部工具位（2 门控 + 22 能力）');
+  assert.equal(atBoot.size, 25, 'apply() 启动时就注册全部工具位（2 门控 + 23 能力）');
   assert.ok(atBoot.has('x_status') && atBoot.has('x_activate'), '两个门控入口仍在');
   assert.ok(atBoot.has('x_desktop_apps') && atBoot.has('x_browser_open'), '桌面/浏览器工具必须在启动时就注册');
 });
 
-test('eagerRegister=false 时退回门控：启动只有 2 个，激活后 24 个', async (t) => {
+test('eagerRegister=false 时退回门控：启动只有 2 个，激活后 25 个', async (t) => {
   const atBoot = new Map();
   const disposers = [];
   const ctx = {
@@ -64,7 +64,7 @@ test('eagerRegister=false 时退回门控：启动只有 2 个，激活后 24 �
   t.after(() => { disposers.splice(0).forEach((fn) => { try { fn(); } catch { /* 已卸载 */ } }); });
   assert.deepEqual([...atBoot.keys()], ['x_status', 'x_activate'], '关掉后启动时只有两个门控');
   await atBoot.get('x_activate').execute({}, {});
-  assert.equal(atBoot.size, 24, 'x_activate 之后是 24 个');
+  assert.equal(atBoot.size, 25, 'x_activate 之后是 25 个');
 });
 
 test('x_activate 幂等：启动已注册的情况下再调，新增数为 0', async (t) => {
@@ -79,10 +79,10 @@ test('x_activate 幂等：启动已注册的情况下再调，新增数为 0', a
   const r = await atBoot.get('x_activate').execute({}, {});
   assert.equal(r.ok, true);
   assert.equal(r.toolCount, 0, '已经注册过了，重复调用不该再报新增');
-  assert.equal(atBoot.size, 24, '也不该重复注册');
+  assert.equal(atBoot.size, 25, '也不该重复注册');
 });
 
-test('全部 24 个工具的 schema 满足宿主 raw JSON Schema 子集', async (t) => {
+test('全部 25 个工具的 schema 满足宿主 raw JSON Schema 子集', async (t) => {
   const { registered, dispose } = await allTools();
   t.after(dispose);
   const failures = [];

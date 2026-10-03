@@ -18,9 +18,32 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { buildDesktopTools } from '../lib/desktop/tools.js';
-import { createShotFlash } from '../lib/shot-frame.js';
+import { readFileSync, mkdtempSync, rmSync, cpSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createShotFlash, createPointMarker } from '../lib/shot-frame.js';
+
+// ── 搭一份 lib 副本，把 physical.js 换成记录桩（p1-fixes 同款做法）────────
+// 不这么做的话 x_desktop_click_at 里的 activateWindow/clickAt 是**真的**会去
+// 前置窗口、动光标——测试要么失败（hwnd 不存在），要么打扰正在用电脑的用户。
+const HERE = dirname(fileURLToPath(import.meta.url));
+const LIB = join(HERE, '..', 'lib');
+const TMP = mkdtempSync(join(tmpdir(), 'cx-frame-'));
+process.on('exit', () => { try { rmSync(TMP, { recursive: true, force: true }); } catch { /* 忽略 */ } });
+cpSync(LIB, TMP, { recursive: true });
+writeFileSync(join(TMP, 'desktop', 'physical.js'), `
+/** 测试桩：记录调用，绝不碰真实光标/键盘。 */
+globalThis.__CX_PHYSICAL__ ??= [];
+const rec = (entry, ...args) => { globalThis.__CX_PHYSICAL__.push([entry, ...args]); };
+export function userIdleMs() { return 999999; }
+export function assertUserIdle() { rec('assertIdle'); }
+export function activateWindow(hwnd) { rec('activate', hwnd); }
+export function clickAt(x, y, button) { rec('click', x, y, button); }
+export function typeUnicode(text) { rec('type', text); }
+export function pressChord(chord) { rec('key', chord); }
+`, 'utf8');
+const { buildDesktopTools } = await import(pathToFileURL(join(TMP, 'desktop', 'tools.js')).href);
 
 const cfg = {
   ttlMs: 30000, allowedApps: [], physicalIdleMs: 0, trustPhysicalInput: true,
@@ -136,4 +159,83 @@ test('createShotFlash：同步 spawn、参数正确、失败静默不外抛', ()
   // spawn 本身抛错：静默 false，绝不往外抛（装饰失败不能影响截图）
   const boom = createShotFlash({ spawnImpl: () => { throw new Error('spawn 失败'); } });
   assert.equal(boom({ x: 0, y: 0, width: 10, height: 10 }), false);
+});
+
+// ── 点位标记（0.5.34：借鉴 UI-TARS-desktop 的 setOfMarks——标记"点了哪里"，
+//    只借概念与尺寸，不借它的文字标签，也不借 SVG 旋转动画）──
+
+test('坐标点击成功后必须在点位触发标记，且不 await（与取景框同一纪律）', async () => {
+  globalThis.__CX_PHYSICAL__ = []; // 拦下真实光标/点击（p1-fixes 同款做法）
+  try {
+    const seen = [];
+    const manager = {
+      windowRect: async () => ({ x: 1264, y: 228, width: 1296, height: 1007, hwnd: 7277922, title: 'T' }),
+    };
+    const ctx = { get: () => undefined, logger: { info() {}, warn() {} } };
+    const list = buildDesktopTools(ctx, { ...cfg, physicalIdleMs: 0, trustPhysicalInput: true }, {
+      manager,
+      pointMarker: (pt) => { seen.push(pt); return new Promise(() => {}); }, // 永不 settle
+    });
+    const tool = list.find((t) => t.name === 'x_desktop_click_at');
+    assert.ok(tool, 'x_desktop_click_at 必须存在');
+
+    const v = await Promise.race([
+      tool.execute({ observation: 'obs', x: 600, y: 913, confirm_disturbance: true }, { agent: 'a' }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('点位标记阻塞了点击')), 3000)),
+    ]);
+    assert.equal(v.ok, true);
+    assert.deepEqual(v.clickedAt, { screenX: 1864, screenY: 1141 });
+    assert.equal(seen.length, 1, '点击成功后必须触发一次点位标记');
+    assert.deepEqual(seen[0], { x: 1864, y: 1141 }, '必须用屏幕坐标（clickedAt），不是窗口内坐标');
+  } finally { delete globalThis.__CX_PHYSICAL__; }
+});
+
+test('点位标记在点击**失败**时不得触发（没点到就不该提示用户"点了这里"）', async () => {
+  globalThis.__CX_PHYSICAL__ = [];
+  try {
+    let fired = 0;
+    const manager = { windowRect: async () => ({ x: 0, y: 0, width: 100, height: 100, hwnd: 1, title: 'T' }) };
+    const list = buildDesktopTools({ get: () => undefined, logger: { info() {}, warn() {} } },
+      { ...cfg, physicalIdleMs: 0, trustPhysicalInput: true },
+      { manager, pointMarker: () => { fired += 1; } });
+    const tool = list.find((t) => t.name === 'x_desktop_click_at');
+    // 坐标越界：在 guardPhysical 与 clickAt 之前就抛
+    await assert.rejects(() => tool.execute({ observation: 'obs', x: 9999, y: 9999, confirm_disturbance: true }, { agent: 'a' }),
+      (e) => e.code === 'INTERNAL');
+    assert.equal(fired, 0, '没点到就不许闪标记');
+  } finally { delete globalThis.__CX_PHYSICAL__; }
+});
+
+test('createPointMarker：按点位发进程、失败静默（镜像 createShotFlash 的纪律）', () => {
+  const calls = [];
+  const marker = createPointMarker({
+    env: {},
+    spawnImpl: (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { unref() {}, on() {} }; },
+  });
+  assert.equal(marker({ x: 1864, y: 1141 }), true);
+  assert.equal(calls.length, 1, '必须同步发出');
+  const a = calls[0].args;
+  assert.ok(a.some((s) => /point-marker\.ps1$/.test(s)), '必须指向 lib/point-marker.ps1');
+  assert.equal(a[a.indexOf('-X') + 1], '1864');
+  assert.equal(a[a.indexOf('-Y') + 1], '1141');
+  assert.equal(calls[0].opts.stdio, 'ignore');
+
+  const none = createPointMarker({ spawnImpl: () => { throw new Error('不该被调用'); } });
+  assert.equal(none(null), false, '空点位不发');
+  assert.equal(none({ x: NaN, y: 1 }), false, 'NaN 不发');
+  const boom = createPointMarker({ spawnImpl: () => { throw new Error('spawn 失败'); } });
+  assert.equal(boom({ x: 1, y: 2 }), false, 'spawn 抛错必须静默返回 false');
+});
+
+test('point-marker.ps1 真跑一次必须 exit 0（语法门管不了运行时错）', { skip: process.platform !== 'win32' }, async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+  const script = new URL('../lib/point-marker.ps1', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const { stdout, stderr } = await run('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
+    '-ExecutionPolicy', 'Bypass', '-File', script, '-X', '180', '-Y', '180', '-Ms', '300',
+  ], { timeout: 20000, windowsHide: true });
+  assert.equal(stderr.trim(), '', `stderr 非空：${stderr}`);
+  assert.equal(stdout.trim(), '', `stdout 非空：${stdout}`);
 });

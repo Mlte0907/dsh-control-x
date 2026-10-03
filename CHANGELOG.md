@@ -1,5 +1,61 @@
 # 更新日志
 
+## 0.5.34（2026-10-04）
+
+**从两个参考项目里真借了两样：`x_desktop_wait`（补齐桌面侧的"等一下再看"）与坐标点击的点位标记。
+工具数 24 → 25。**
+
+### ① `x_desktop_wait`——桌面侧一直缺位，模型自己撞过
+
+**真机证据**（`session-c7fd771f` step28，2026-10-03 23:56）：
+
+```
+TOOL x_desktop_wait {}  →  Error: unknown tool "x_desktop_wait"
+```
+
+浏览器侧早有 `x_browser_wait`，桌面侧没有——**模型自己预期它存在，连名字都是它猜的**，
+当时只能改用 `pwsh Start-Sleep` 绕。参考依据（用户点名的 UI-TARS）：他们把 `wait()`
+做成 action space 的**一等公民**：`wait() # Sleep for 5s and take a screenshot to check
+for any changes`——"等一下再观察"本来就是 GUI 任务的常态动作，不该让模型去发明工具名。
+
+- 范围 **100–10000ms**（`WAIT_MS_MIN/MAX` + `clampWaitMs`，常量被测试钉住）。
+  生成类任务要 30 秒？**分几次等或先干别的**——单次睡太久会把整轮任务吊住，所以
+  超上限不是"默默夹一下"，而是把上限写进描述，让模型自己决定怎么拆。
+- 返回 `note` 明确要求：**醒来先重新 `x_desktop_tree`**，不要拿等待前的快照做动作。
+- 描述同时点明：等待期间用户可能在用电脑，醒来后的第一个动作照常过物理门控。
+
+### ② 坐标点击的点位标记——借 UI-TARS-desktop 的 `setOfMarks`，只借概念
+
+他们（`apps/ui-tars/src/main/shared/setOfMarks.ts`）给 click 画 **250×100 红色旋转虚线圈
++ 中心点 + 动作名标签**，还给 `type` 画 `Typing: "<内容>"`、给 `hotkey` 画 `Hotkey: ctrl + c`，
+最长 5s 自动关。
+
+我们**只借"标在点位上"**：
+- **不加文字**——用户对横幅的原话是"不要给我多加字"，这是同一类装饰；
+- **不借 SVG 旋转动画**——Electron 画 SVG 零成本，WinForms 要逐帧重绘不划算；
+- 改成**水波纹**：环半径 10px → 26px 扩散 + 600ms 淡出，红色 `#ef4444`（横幅状态点同色）。
+
+纪律与取景框完全一致：**屏幕坐标**（`clickedAt.screenX/Y`）、**点击成功才触发**（没点到
+就不该提示"点了这里"）、**同步 spawn / 绝不 await / 失败静默**。
+`buildDesktopTools` 的 deps 相应扩为 `{ manager, shotFlash, pointMarker }`。
+
+### 连带更新（工具数 24 → 25，三处门都被迫改）
+
+- `tests/host-contract.test.mjs`：4 处 `24` → `25`（"2 门控 + 23 能力"）；
+- `scripts/host-contract-verify.mjs`：`EXPECTED` 点名列表加 `x_desktop_wait`；
+- `lib/index.js` `x_activate` 描述：「浏览器 10 工具 + 桌面 **10** 工具」。
+
+### 测试踩到的真输入风险（照仓库惯例解决）
+
+`x_desktop_click_at` 的测试会走真 `activateWindow`/`clickAt` —— 要么因 hwnd 不存在而失败，
+要么**真的动了正在用电脑的用户光标**。按 `p1-fixes.test.mjs` 的既有做法：拷一份 `lib/`
+到临时目录、把 `physical.js` 换成记录桩，再从副本 import。
+
+### 明确不做（用户 2026-10-04 拍板）
+
+- **预热常驻取景框**：框比截图晚 1–2s 出现没关系，作用只是"让用户知道刚才有截图这个动作"，
+  现有实现已满足，**不再改**。
+
 ## 0.5.33（2026-10-04）
 
 **取景框按用户实测反馈调温和；`x_desktop_launch` 终于会自己按名字找应用（4/4 必撞的缺口）。**
