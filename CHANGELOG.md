@@ -1,5 +1,65 @@
 # 更新日志
 
+## 0.5.32（2026-10-03）
+
+**截图取景框：截图时在目标窗口外缘闪一下，告诉用户「刚截的是这里」。**
+
+用户提出：Zcode 截图时会有个焦点框闪一下。（本机的 zcode `computer-use 0.6.3` 插件
+docs/skills/scripts 里**查不到**这个实现——它更可能来自 Zcode 客户端本体，所以这里按我们
+自己的事实做，**不声称复刻它**。）
+
+截屏是**读用户的屏幕**，静默发生就是透明性缺口；横幅只说"正在控制电脑"，不说截的是哪里。
+
+### 范围（用户拍板）
+
+- **只 `x_desktop_shot`**；`x_browser_shot` 是无头浏览器，窗口不可见、无从闪框。
+- **跟现有「允许窗口截图」开关走，零新配置项**：开关检查在 execute 最前面，关着时直接抛
+  `ACTION_UNAVAILABLE` → 一次框都不会闪。这条是结构性成立的，不是靠记得去判断。
+
+### 实现
+
+| 文件 | 职责 |
+|---|---|
+| `lib/shot-frame.js` | `createShotFlash(rect)`：**同步 spawn、fire-and-forget**，一切异常吞掉返回 false |
+| `lib/shot-frame.ps1` | 4px 框、350ms 淡出、环形 Region（只画边、内部全透）、自毁退出 |
+| `lib/desktop/tools.js` | `buildDesktopTools(ctx, cfg, { manager, shotFlash })`：拍完照立刻触发 |
+
+设计要点（每条都有理由）：
+
+1. **绝不 await**——提示是装饰，拖慢截图本末倒置；画不出来就当没有。
+2. **框画在目标矩形外缘**（ps1 内 `-Border` 外扩 4px）：即使它在 BitBlt 进行时出现，
+   也**不会被截进图片**污染交付物。
+3. **独立短命进程，不复用横幅浮窗**：横幅可能被关（`desktopBanner=false`）、可能还没被
+   活动钩子拉起、可能已按 `idleExitMs` 自退——取景框必须在这三种情况下照常工作；反过来
+   它崩了也不能牵连横幅或截图。代价是每次截图多一个 ~1s 短命进程，而截图本身每次已经在
+   spawn `uia-helper`（同一个 powershell），模式一致。
+4. `WS_EX_TRANSPARENT`（绝不吃点击）+ `NOACTIVATE` + `TOOLWINDOW`（不抢焦点、不出现在
+   Alt+Tab），`SetProcessDPIAware`（否则坐标被 DPI 虚拟化缩放，框画歪）。
+5. **硬寿命**：定时器到点必关窗——一个卡死在桌面上的框比没有框更糟。
+6. `manager` 与 `shotFlash` 均可注入 → 测试能走通 `x_desktop_shot` 整条链路，不必碰真 UIA。
+
+### 踩了一个 Parser 门查不出的坑（已加运行时门）
+
+第一版真跑立刻炸：
+
+```
+因为 [System.Object[]] 没有名为 op_Subtraction 的方法
+```
+
+根因：`New-Object Type($a, $b - $c, ...)` 把括号内容当**参数数组**解析，`-` 于是被拿去
+数组上找 `op_Subtraction`。**官方 Parser 全绿**——`ps-scripts.test.mjs` 只管语法，
+这类运行时错它天生管不着。改成先算进变量再传即可（探针复现：带算术报错、预存变量正常）。
+
+### 四道门（先红后绿）
+
+1. 触发 + **不 await**：注入一个永不 settle 的 promise，用 3s race 兜底——谁写了 `await`
+   就会报「截图被取景框阻塞」；
+2. 开关关着 → 工具拒绝且取景框 **0 次**触发；
+3. `createShotFlash` 行为：参数形状、负坐标（副屏）、非法矩形不 spawn、spawn 抛错静默 false；
+4. **真跑一次 `exit 0`**（仅 win32）——专门抓上面那类"语法门全绿、一跑就炸"的错。
+
+（新 `.ps1` 同时被 `ps-scripts` 的 Parser 门 + 编码门自动覆盖。）
+
 ## 0.5.31（2026-10-03）
 
 **横幅主题第二次翻车：0.5.30 修完 `rgb()` 折算，底色仍然是死的——因为取色用的变量名
