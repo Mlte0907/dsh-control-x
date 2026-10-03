@@ -25,8 +25,16 @@ const pkgVersion = readJson('package.json').version;
 const manifestVersion = readJson('dsh-plugin.json').version;
 const changelog = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
 
-/** CHANGELOG 里所有 `## x.y.z（日期）` 标题，按出现顺序。 */
-const headings = [...changelog.matchAll(/^## (\S+?)\s*(?:（|\()/gm)].map((m) => m[1]);
+/**
+ * CHANGELOG 里所有版本标题，按出现顺序。
+ *
+ * ⚠️ 必须**先过滤成纯数字点分**再用——2026-10-03 踩过：原来用
+ * `/^## (\S+?)\s*(?:（|\()/gm`，结果把「## 桌面与浏览器：两条路的事实（不给处方）」
+ * 这类小节标题也当成版本抓了进来，于是「版本号必须是纯数字」那条测试对着一个中文
+ * 小节名报错——**测试自己坏了，看起来像代码坏了**。
+ * 现在只收「## 后面紧跟数字点分」的那种：不合版本形态的一律不是版本标题。
+ */
+const headings = [...changelog.matchAll(/^## (\d+(?:\.\d+)*)\s*(?:（|\()/gm)].map((m) => m[1]);
 
 test('package.json 与 dsh-plugin.json 的版本必须一致', () => {
   assert.equal(manifestVersion, pkgVersion,
