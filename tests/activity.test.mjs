@@ -116,3 +116,38 @@ test('GET /activity 返回活动快照；无 tracker 时如实报不可用而不
   assert.equal(bare.available, false, '没有 tracker 时必须自报不可用，客户端据此隐藏横幅');
   assert.equal(bare.active, false);
 });
+
+test('POST /activity-theme：rgb() 必须折算成 #RRGGBB，解析不了就一个字节都不动', async () => {
+  // 2026-10-03 用户实测「桌面横幅不随宿主主题变化」。根因在宿主样式表原文
+  // （从 app.asar 抽出核实）：
+  //     --dsw-static-neutral-bluish-1000: rgb(15, 17, 21);
+  //     --dsw-alias-label-primary: var(--dsw-static-neutral-bluish-1000);
+  // 客户端 getComputedStyle 取回的就是 `rgb(15, 17, 21)`，而本路由只收 #hex →
+  // **静默丢弃** → bannerTheme 永远是空串 → 浮窗停在默认深色。丢弃就是故障本身。
+  const { callRoute } = await import('./helpers.mjs');
+  const banner = { theme: { bg: '', fg: '' }, info: () => ({ overlay: false }) };
+  let route = null;
+  new WatchServer({ listTabs: () => [] }, null, null, banner)
+    .attach({ register: (r) => { route = r; } });
+
+  const ok = await callRoute(route, 'POST', '/activity-theme', {
+    bg: 'rgb(15, 17, 21)', fg: 'rgb(249, 250, 251)',
+  });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(banner.theme, { bg: '#0f1115', fg: '#f9fafb' },
+    '宿主 CSS 的原文写法必须被折算成 #RRGGBB，否则等于把主题色丢掉');
+
+  const alpha = await callRoute(route, 'POST', '/activity-theme', {
+    bg: '#800f1115', fg: '#ffF9FAFB',
+  });
+  assert.equal(alpha.status, 200);
+  assert.deepEqual(banner.theme, { bg: '#0f1115', fg: '#f9fafb' },
+    '不透明 #AARRGGBB 折算成 6 位；半透明浮窗画不了，保留上一次的真值而不是清成默认色');
+
+  const junk = await callRoute(route, 'POST', '/activity-theme', {
+    bg: 'light-dark(#fff, #000)', fg: 'var(--whatever)',
+  });
+  assert.equal(junk.status, 200);
+  assert.deepEqual(banner.theme, { bg: '#0f1115', fg: '#f9fafb' },
+    '解析不了的老实不动（保留上一次的真值）——静默清空正是这次的故障形态');
+});

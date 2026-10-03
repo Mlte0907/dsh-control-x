@@ -205,3 +205,64 @@ test('x_vision_describe 的 attachment 路径必须真过一遍参数校验（0.
   assert.equal(r.ok, true, 'attachment 路径必须能走通——degraded 桌面窗口只有这一条图源');
   assert.equal(r.text, '豆包窗口，底部有输入框');
 });
+
+test('x_vision_describe 支持 file_path：工作区里刚落盘的图也能被视觉模型看到', async () => {
+  // 2026-10-03 真机会话 238eddfb step33-36：模型生成完图片想验收，但它只能吃文本，
+  // 宿主 read_image 拒（model does not declare image input），而 x_vision_describe
+  // **只收 attachment 引用/ tab_id**——它三次都传了同一个旧截图的 attachmentId，
+  // 视觉模型反复答「我看到的是豆包界面截图，不是那张长图」，最后只能用 PowerShell
+  // 解析 PNG 头+数颜色来"验图"。纯文本模型 + 图落在工作区 = 没有验图通道。
+  const { writeFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { buildVisionTools } = await import('../lib/vision/tools.js');
+
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const file = join(tmpdir(), `cx-vision-filepath-${Date.now()}.png`);
+  writeFileSync(file, png);
+  try {
+    let saved = null;
+    let seen = null;
+    const attachments = {
+      saveImage: async ({ data, mediaType, name }) => {
+        saved = { bytes: data.length, mediaType, name };
+        return { attachmentId: 'sha256:fromfile', mediaType, bytes: data.length, width: 1, height: 1, name };
+      },
+    };
+    const llm = {
+      listProviders: async () => ['p1'],
+      listModels: async () => [{ provider: 'p1', id: 'm1', name: 'M1', inputModalities: ['image'] }],
+      stream: async function* (opts) { seen = opts; yield { type: 'text-delta', text: '一张 1x1 的测试图' }; },
+    };
+    const ctx = {
+      get: (n) => (n === 'llm' ? llm : n === 'attachments' ? attachments : undefined),
+      logger: { info() {}, warn() {} },
+    };
+    const [tool] = buildVisionTools(ctx, { visionModel: '' }, { browserManager: null });
+
+    const r = await tool.execute({ file_path: file }, {});
+    assert.equal(r.ok, true, 'file_path 必须能走通整条链路（读文件 → 存 attachments → 视觉模型）');
+    assert.equal(r.text, '一张 1x1 的测试图');
+    assert.deepEqual(saved, { bytes: png.length, mediaType: 'image/png', name: pathBasename(file) },
+      '必须按真实字节入库，mediaType 由文件内容判定');
+
+    const img = seen.messages[0].content.find((c) => c.type === 'image');
+    assert.equal(img.attachment.attachmentId, 'sha256:fromfile',
+      '视觉模型收到的必须是这张文件的引用——不能是别的旧截图');
+
+    // 文件不存在：要点名路径，别甩一句"缺少图片附件"把方向指错
+    await assert.rejects(
+      () => tool.execute({ file_path: join(tmpdir(), 'cx-not-here.png') }, {}),
+      (e) => /cx-not-here\.png/.test(e.message),
+    );
+  } finally {
+    try { rmSync(file, { force: true }); } catch { /* 已清理 */ }
+  }
+});
+
+function pathBasename(p) {
+  return String(p).split(/[\\/]/).pop();
+}

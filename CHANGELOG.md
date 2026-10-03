@@ -1,5 +1,56 @@
 # 更新日志
 
+## 0.5.30（2026-10-03）
+
+**修用户实测的「桌面横幅不随宿主主题变化」，并给 `x_vision_describe` 补上 `file_path`。**
+
+### 一、横幅主题：颜色在两道口子之间被"静默丢弃"
+
+用户报障：操作时桌面横幅不随宿主深浅色变化。根因是从 `app.asar` 抽出来的样式表原文：
+
+```css
+--dsw-static-neutral-bluish-1000: rgb(15, 17, 21);
+--dsw-alias-label-primary: var(--dsw-static-neutral-bluish-1000);
+```
+
+`getComputedStyle` 对**自定义属性**返回的是**字面量**（`var()` 会替换，`rgb()` 不会求值），
+于是客户端 `pushTheme` POST 上去的是 `rgb(15, 17, 21)`；而 `/activity-theme` 只收
+`#RGB/#RRGGBB/#AARRGGBB`，**其余一律丢弃**——`bannerTheme` 永远是空串，浮窗停在
+`DEFAULT_THEME`（`#23242a` / `#eeeeee`），**怎么切主题都不动**。
+
+丢弃即故障：这条门本来是防"非法值让 WinForms 崩"的，结果把合法但写法不同的颜色
+一起挡在门外，而且一声不吭。
+
+**改法（两头都补）：**
+
+1. `client.js`：新增 `toHex()`——用探针元素把任意 CSS 颜色解析成 `#rrggbb`
+   （探针的 computed `color` 一定被浏览器规范化成 `rgb()/rgba()`），**折算后再上报**；
+   并按值去重：没变不发（观测器每次属性抖动都会调）。发失败会回滚去重标记，下一轮重发。
+2. `watch.js`：`parseBannerColor()` 认 `#RGB/#RRGGBB/不透明 #AARRGGBB/rgb()/rgba()`，
+   **认不出就保留上一次的真值、一个字节都不动**——原实现的"认不出就写空串"正是故障形态。
+   半透明一律认不出：WinForms 画不了 alpha，宁可用上一次的实色也不给糊掉的横幅。
+
+**两道门（先红后绿）**：`activity.test`（rgb 必须折算 / 解析不了必须不动旧值）、
+`banner.test`（源码门：必须存在 `toHex`，且 `pushTheme` 里不许出现"取到什么发什么"的裸上报）。
+
+### 二、`x_vision_describe` 新增 `file_path`：纯文本模型终于能验图
+
+真机证据（`session-238eddfb` step33-36，0.5.29）：模型生成完 1248×3328 长图要验收，
+但会话模型只吃文本 → 宿主 `read_image` 拒（`model does not declare image input`）；
+本工具此前**只收 attachment 引用 / tab_id**，它三次都拿**旧截图**的 `attachmentId` 硬凑，
+视觉模型反复答「我看到的是豆包界面截图，不是那张长图」，最后只能用 PowerShell 解析 PNG 头
++ 数颜色来"验图"。**纯文本模型 + 图落在工作区 = 没有验图通道。**
+
+新入参 `file_path`（与 attachment 二选一）：读文件字节 → 魔数嗅探 `mediaType`
+（PNG/JPEG/GIF，WebP 看 RIFF 头；扩展名兜底）→ `attachments.saveImage` → **五个字段
+逐一校验**（缺字段点名报错：宿主读图会逐项比对元数据，少一个就整单拒——0.5.22 的教训）。
+
+错误语义全部点名道姓：文件不存在 → `APP_NOT_FOUND` **并给出路径**（模型能自己发现路径写错）；
+未挂 attachments 服务 → `ACTION_UNAVAILABLE`；不是图片 → `ACTION_UNAVAILABLE`。
+
+**门**：`p1-fixes` 用真工具 + 真临时文件走完整链路，并断言视觉模型收到的是**这张文件**的引用
+（今天以前必然失败：`file_path` 被静默忽略 → 抛"缺少图片附件"）。
+
 ## 0.5.29（2026-10-03）
 
 **skill 撤掉最后一条「排序型死规则」，并修掉一句与真机相反的物化断言。**

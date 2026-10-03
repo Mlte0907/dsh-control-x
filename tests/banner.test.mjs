@@ -149,3 +149,24 @@ test('轮询节奏随活跃状态切换（活跃 600ms / 空闲 2500ms）', asyn
   assert.ok(calls.every((u) => u === '/api/x-control/activity'), '只打活动端点');
   assert.ok(calls.length >= 1);
 });
+
+test('主题上报必须把 CSS 颜色折算成 #RRGGBB（不折算就会被服务端静默丢弃）', async () => {
+  // 2026-10-03 真机故障：宿主样式表原文是
+  //     --dsw-static-neutral-bluish-1000: rgb(15, 17, 21);
+  //     --dsw-alias-label-primary: var(--dsw-static-neutral-bluish-1000);
+  // getComputedStyle 对自定义属性返回的是**字面量**，于是客户端 POST 上去的是
+  // `rgb(15, 17, 21)`，服务端只收 #hex、其余丢弃 → 主题色永远落不了地，
+  // 桌面横幅停在默认深色，**不随宿主深浅色变化**（用户实测报告）。
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
+  assert.match(src, /function toHex\(/,
+    '必须有颜色折算函数——自定义属性给的是 rgb()/var() 字面量，不是 #hex');
+  const from = src.indexOf('function pushTheme');
+  const to = src.indexOf('function tick');
+  assert.ok(from > 0 && to > from, 'pushTheme 与 tick 的位置变了：本断言要看两者之间的那段');
+  const push = src.slice(from, to);
+  assert.match(push, /toHex\(/,
+    'pushTheme 上报的必须是折算后的值，不能把 CSS 原文直接 POST 上去');
+  assert.doesNotMatch(push, /getPropertyValue\([^)]*\)\.trim\(\)[^)]*\)/,
+    '不许再出现「取到什么就发什么」的裸上报——那正是被服务端丢掉的那条路径');
+});
