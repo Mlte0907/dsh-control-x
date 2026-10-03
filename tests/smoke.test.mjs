@@ -68,6 +68,19 @@ test('x_status 返回值通过宿主无损 JSON 快照规则（0.5.9 cfg 漏 get
   assert.equal(typeof value.config.bannerIdleExitMs, 'number', 'bannerIdleExitMs 必须是数字——设置页那个字段要真的生效');
 });
 
+test('x_status 必须暴露横幅主题色——主题没落地要一眼可见，不许再静默（2026-10-03 就是靠这个字段查出来的）', async (t) => {
+  const { ctx, registered, dispose } = makeMockCtx();
+  t.after(dispose);
+  apply(ctx, { headless: true });
+  const value = await registered.get('x_status').execute({}, {});
+  assert.ok(value.banner, 'x_status 必须带 banner 字段（bg/fg 空串 = 主题没落地）');
+  assert.equal(typeof value.banner.bg, 'string', 'bg 必须是字符串；空串就说明取色变量在宿主里不存在');
+  assert.equal(typeof value.banner.fg, 'string');
+  const schema = registered.get('x_status').output.schema;
+  assert.ok(schema.properties?.banner, 'output.schema 必须声明 banner，否则宿主校验可能拒收');
+  assert.deepEqual(losslessJsonViolations(value), []);
+});
+
 test('losslessJsonViolations 镜像宿主规则：undefined / 非纯净原型 / 循环引用 / NaN / 空洞数组 / -0', () => {
   assert.deepEqual(losslessJsonViolations({ ok: 1, nested: { list: ['a', 2, null] } }), []);
   assert.match(losslessJsonViolations({ a: undefined })[0], /value\.a/);

@@ -93,7 +93,12 @@ test('背景框用宿主主题变量（切浅/深主题自动跟随），且不�
   t.after(dispose);
   await flush();
   const box = banner().children[0];
-  assert.match(box.style.cssText, /background:var\(--dsw-alias-bg-elevated/, '背景必须是主题层变量');
+  // ⚠️ 这条断言原先钉的是 `--dsw-alias-bg-elevated`——**宿主里不存在这个变量**，
+  // CSS 于是永远走 fallback `#23242a`，页面横幅底色从不随主题变；而测试只检查
+  // "用了某个主题变量名"，所以照样全绿。**测试把 bug 本身钉住了。**
+  // 现在钉 `bg-layer-1`（宿主真实定义），变量名是否真存在由 `npm run verify:host-css`
+  // 对着 app.asar 逐个核。
+  assert.match(box.style.cssText, /background:var\(--dsw-alias-bg-layer-1/, '背景必须是宿主真实定义的主题层变量');
   assert.match(box.style.cssText, /color:var\(--dsw-alias-label-primary/, '文字色跟随主题');
   assert.doesNotMatch(box.style.cssText, /background:[^;]*--dsw-alias-brand-primary/,
     '本机 brand 变量解析成白色，不能用它当背景');
@@ -150,23 +155,28 @@ test('轮询节奏随活跃状态切换（活跃 600ms / 空闲 2500ms）', asyn
   assert.ok(calls.length >= 1);
 });
 
-test('主题上报必须把 CSS 颜色折算成 #RRGGBB（不折算就会被服务端静默丢弃）', async () => {
-  // 2026-10-03 真机故障：宿主样式表原文是
-  //     --dsw-static-neutral-bluish-1000: rgb(15, 17, 21);
-  //     --dsw-alias-label-primary: var(--dsw-static-neutral-bluish-1000);
-  // getComputedStyle 对自定义属性返回的是**字面量**，于是客户端 POST 上去的是
-  // `rgb(15, 17, 21)`，服务端只收 #hex、其余丢弃 → 主题色永远落不了地，
-  // 桌面横幅停在默认深色，**不随宿主深浅色变化**（用户实测报告）。
+test('主题上报必须成对取自宿主真实存在的变量（凭空写的变量名就是这次故障的根因）', async () => {
+  // 2026-10-03 23:xx 真机复盘（0.5.30 装了、折算也生效了，横幅底色**仍然**不变）：
+  // 直接问运行中的面板 GET /api/x-control/activity，拿到
+  //     {"theme":{"bg":"","fg":"#0f1115"}}
+  // fg 已经是折算好的 hex（证明 toHex 在工作），bg 却是**空串**——因为
+  // `--dsw-alias-bg-elevated` **在宿主里根本不存在**（从 app.asar 抽出：宿主共定义
+  // 107 个 --dsw-alias-* 变量，没有这一个）。变量名是当初凭印象写的，取不到就返回 ''，
+  // 一路静默到浮窗 → 底色永远停在 DEFAULT_THEME 的 #23242a，用户看到的就是
+  // 「桌面横幅不随宿主主题变化」。
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
-  assert.match(src, /function toHex\(/,
-    '必须有颜色折算函数——自定义属性给的是 rgb()/var() 字面量，不是 #hex');
+  assert.match(src, /function toHex\(/, '必须有颜色折算函数');
+  assert.match(src, /THEME_PAIRS/, '必须是候选对列表——宿主改名/缺变量时能退到下一对');
   const from = src.indexOf('function pushTheme');
   const to = src.indexOf('function tick');
   assert.ok(from > 0 && to > from, 'pushTheme 与 tick 的位置变了：本断言要看两者之间的那段');
-  const push = src.slice(from, to);
-  assert.match(push, /toHex\(/,
-    'pushTheme 上报的必须是折算后的值，不能把 CSS 原文直接 POST 上去');
-  assert.doesNotMatch(push, /getPropertyValue\([^)]*\)\.trim\(\)[^)]*\)/,
-    '不许再出现「取到什么就发什么」的裸上报——那正是被服务端丢掉的那条路径');
+  assert.match(src.slice(from, to), /readPair\(/,
+    'pushTheme 必须走 readPair 成对取色，不能单点读一个变量（单点=单点故障，且失败不可见）');
+  // 死名字不许复活：只查取色用的那段，注释里提到它是为了留案底
+  const pairs = src.slice(src.indexOf('THEME_PAIRS'), src.indexOf('function readPair'));
+  assert.ok(pairs.length > 0, 'THEME_PAIRS 必须是数组字面量');
+  assert.doesNotMatch(pairs, /bg-elevated/, '取色列表里不得再出现宿主没有的变量名');
+  assert.match(pairs, /--dsw-alias-bg-layer-1/, '第一对必须是宿主真实存在的页面底色变量');
+  assert.match(pairs, /--dsw-alias-label-primary/, 'fg 必须用 label-primary（宿主确实定义了它）');
 });
