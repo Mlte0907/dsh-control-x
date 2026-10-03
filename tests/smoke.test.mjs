@@ -130,6 +130,53 @@ test('参数校验：必填缺失与类型错误都能拦下', () => {
   assert.deepEqual(validateAgainstSchema(schema, { url: 'x', count: 2 }), []);
 });
 
+test('参数校验：属性节点上的布尔 required 不得把校验器炸掉（0.5.27 真机崩溃点）', () => {
+  // 2026-10-03 两个真机会话实证：
+  //   session-949b10c8（装 0.5.25）13:50:44 → Error: boolean true is not iterable
+  //   session-32c83987（装 0.5.27）14:08:59 → 同一句，且传的是**字段齐全**的 image 引用
+  // 根因：`required: true` 是 property-map DSL，含义是「**我对父级**必填」，
+  // 而 validateAgainstSchema 把它当成「**我自己的**必填键列表」拿去 for...of —— 遍历布尔值。
+  // 父级语义已由 core/host-schema.js 的 toHostSchema 提升负责，子级自查必须放行布尔值。
+  const schema = {
+    type: 'object',
+    properties: {
+      attachment: {
+        type: 'object',
+        required: true, // DSL 写法：对父级必填，不是"我的 required 键列表"
+        properties: { attachmentId: { type: 'string' } },
+      },
+      prompt: { type: 'string' },
+    },
+    required: [],
+  };
+  assert.deepEqual(
+    validateAgainstSchema(schema, { attachment: { attachmentId: 'sha256:x' }, prompt: 'p' }),
+    [],
+    '真机上这一句直接抛 TypeError，工具连 execute 都进不去',
+  );
+  assert.deepEqual(
+    validateAgainstSchema(schema, { prompt: 'p' }),
+    [],
+    '布尔 required 也不得被当成"缺了哪些键"来报必填',
+  );
+});
+
+test('参数校验：数组冒充 object 必须报「实际是 array」（0.5.27 报的是 object，把模型带偏）', () => {
+  // 真机 session-32c83987 14:09:03：模型改传数组，得到
+  //   「x_vision_describe 参数不合法：args.attachment 需要 object 类型，实际是 object」
+  // 这句自相矛盾——它照着改只会继续错。typeof [] === 'object'，必须点名是 array。
+  const schema = {
+    type: 'object',
+    properties: {
+      attachment: { type: 'object', properties: { attachmentId: { type: 'string' } } },
+    },
+  };
+  assert.deepEqual(
+    validateAgainstSchema(schema, { attachment: [{ attachmentId: 'sha256:x' }] }),
+    ['args.attachment 需要 object 类型，实际是 array'],
+  );
+});
+
 test('execute 抛错归一为带 retry 语义的 ControlXError', async () => {
   const { defineXTool } = await import('../lib/core/tool.js');
   const { ControlXError } = await import('../lib/core/errors.js');

@@ -180,3 +180,28 @@ test('x_vision_describe 的 tab_id 捷径：真的能现拍一张（此前必然
   assert.equal(r.text, '一个红色按钮');
   assert.equal(saveImageCalls, 1);
 });
+
+test('x_vision_describe 的 attachment 路径必须真过一遍参数校验（0.5.27 在这一步就崩）', async () => {
+  // 2026-10-03 真机会话实证，两次都是**字段齐全**的 image 引用：
+  //   session-949b10c8（0.5.25）13:50:44 → Error: boolean true is not iterable
+  //   session-32c83987（0.5.27）14:08:59 → 同一句；14:09:03 改传数组 →
+  //     「需要 object 类型，实际是 object」（自相矛盾）
+  // 崩在 wrappedExecute 的参数校验里，**代码根本没走到 describeImage**——
+  // 这正是既有测试全绿却真机翻车的原因：vision.test.mjs 全部直接调 describeImage，
+  // 没有一条用 attachment 对象走 tool.execute。这道门补上那一步。
+  const { buildVisionTools } = await import('../lib/vision/tools.js');
+  const ATTACH = {
+    attachmentId: 'sha256:41b65e2de570343ecf7f18078420da5281176ac84537e259ada1cde0532f3718',
+    mediaType: 'image/jpeg', bytes: 23244, width: 648, height: 503, name: 'x-desktop-1791006640792.jpg',
+  };
+  const llm = {
+    listProviders: async () => ['p1'],
+    listModels: async () => [{ provider: 'p1', id: 'm1', name: 'M1', inputModalities: ['image'] }],
+    stream: async function* () { yield { type: 'text-delta', text: '豆包窗口，底部有输入框' }; },
+  };
+  const ctx = { get: (n) => (n === 'llm' ? llm : undefined), logger: { info() {}, warn() {} } };
+  const [tool] = buildVisionTools(ctx, { visionModel: '' }, { browserManager: null });
+  const r = await tool.execute({ attachment: ATTACH, prompt: '描述这张图' }, {});
+  assert.equal(r.ok, true, 'attachment 路径必须能走通——degraded 桌面窗口只有这一条图源');
+  assert.equal(r.text, '豆包窗口，底部有输入框');
+});

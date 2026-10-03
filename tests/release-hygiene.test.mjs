@@ -121,6 +121,21 @@ test('x_vision_describe 必须同时提到 x_browser_shot 与 x_desktop_shot', a
   assert.match(att.description, /原样|整个传/, '必须说明要原样整个传，否则模型会挑字段传');
 });
 
+test('x_vision_describe 不得把 attachment 对模型声明成必填（tab_id 是合法替代）', async () => {
+  // 2026-10-03 实测：attachment 节点写了 `required: true`，toHostSchema 把它提升成
+  // 宿主实际收到的 `parameters.required = ["attachment"]` —— 等于告诉模型"必须传 attachment"。
+  // 两处事实证明它是错的：
+  //   ① tab_id 捷径合法：session-32c83987 14:15:36 / 14:21:04 两次只传 tab_id 就成功返回；
+  //   ② 工具自己还有第三条路（vision/tools.js execute：没 attachment 时自拍一张）。
+  // 而且"必填 attachment"恰好把模型推向那条**会崩**的路径（见 p1-fixes 的门）。
+  const { buildVisionTools } = await import('../lib/vision/tools.js');
+  const tool = buildVisionTools({ get: () => undefined }, { visionModel: '' }, { browserManager: null })
+    .find((t) => t.name === 'x_vision_describe');
+  assert.deepEqual(tool.parameters.required ?? [], [],
+    'attachment / tab_id / 自拍三选一，任何一个都不该被声明成必填；'
+    + '声明成必填会让模型每次都走上 attachment 校验，而那正是真机上崩掉的那条');
+});
+
 test('compareVersions 必须把 0.5.20b 与 0.5.20 判为相等（钉住上面那条推断）', async () => {
   const { compareVersions } = await import('../lib/core/updater.js');
   // 这条测试的用意是**提醒**：一旦哪天有人"改进"了 compareVersions 让它认字母后缀，

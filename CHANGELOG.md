@@ -1,5 +1,53 @@
 # 更新日志
 
+## 0.5.28（2026-10-03）
+
+**修 `x_vision_describe` 的 attachment 路径——装着 0.5.27 也照样崩。**
+
+这是 0.5.27 没盖住的另一半：0.5.27 修的是 `llm.stream` 少一层 `await`，而
+attachment 这条路**根本走不到那里**，它在参数校验那一步就炸了。
+
+### 两个真机会话的实证（都是**字段齐全**的 image 引用）
+
+| 会话 | 装的版本 | 时间 | 结果 |
+|---|---|---|---|
+| `session-949b10c8` | 0.5.25 | 13:50:44 | `Error: boolean true is not iterable` |
+| `session-32c83987` | 0.5.27 | 14:08:59 | 同一句；14:09:03 改传数组 → 「需要 object 类型，**实际是 object**」 |
+
+同一会话里走 `tab_id` 的两次调用（14:15:36 / 14:21:04）**都成功**——坏的只有
+attachment 分支，也就是 degraded 桌面窗口唯一的那条图源。
+
+### 根因：`required: true` 被两套方言各解释一次
+
+- `core/host-schema.js` 认为它是「**我对父级**必填」→ 提升成宿主收到的 `required` 数组；
+- `core/tool.js` 认为它是「**我自己的**必填键列表」→ 拿去 `for...of` → 遍历布尔值 →
+  `TypeError: boolean true is not iterable`。
+
+触发条件只有一个：某参数节点**同时**有 `properties` 和 `required: true`，且模型真传了对象。
+全量扫描 22 个工具，命中点**有且只有** `x_vision_describe.parameters.attachment`。
+
+### 三处改动
+
+1. `core/tool.js`：`required` 只认字符串数组——布尔值在子级无从自查，父级已由
+   `toHostSchema` 负责。不改变任何既有校验语义，只消掉整个崩溃类别。
+2. `vision/tools.js`：删掉 attachment 的 `required: true`。它把宿主看到的
+   `parameters.required` 变成了 `["attachment"]`，对模型宣布"必填"——可 `tab_id`
+   捷径和工具自拍（execute 里的 shot 兜底）都是合法替代，**真机只传 tab_id 成功过两次**。
+   "必填"恰好把模型每次都推向那条会崩的路。
+3. `core/tool.js`：类型不符时点名 `array`。`typeof [] === 'object'`，旧文案会说
+   「需要 object 类型，实际是 object」——模型照着改只会越改越错。
+
+### 为什么 136/136 全绿照样翻车（这次把门补在真正会响的地方）
+
+既有测试全部**直接调 `describeImage()`**，绕过了 `wrappedExecute` 的参数校验；
+0.5.25 加的那道门也只查「不得是裸 `{type:'object'}`」——补上 `properties` 就过，
+而这恰恰是让布尔 `required` 进入 `for...of` 的前提。新增四道门（先红后绿验证过会响）：
+
+- `smoke`：布尔 `required` 不得炸校验器（改前：TypeError 真抛）；
+- `smoke`：数组冒充 object 必须报 `array`（改前：报 `object`）；
+- `p1-fixes`：**用真工具、真参数**走 attachment 路径（改前：崩在 `core/tool.js:77`）；
+- `release-hygiene`：宿主看到的 `parameters.required` 不得含 `attachment`（改前：`["attachment"]`）。
+
 ## 0.5.27（2026-10-03）
 
 **修复 0.5.24 亲手引入的致命 bug——视觉通道从那次改动起就完全不通了。**
