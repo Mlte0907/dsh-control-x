@@ -52,6 +52,36 @@ namespace XNative {
   public class Shot {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+
+    // Long-edge cap, computed PROPORTIONALLY (0.5.35).
+    //
+    // Evidence (2026-10-04: three real sessions + a scan of every shot in the
+    // session archive, 24 total). The old formula inside Capture was
+    //     scale = (int)Math.Ceiling(longEdge / (double)maxEdge);
+    // an INTEGER divisor, so the result could only ever be 1/2, 1/3, 1/4 ...
+    // of the source. A 1296-wide window with the DEFAULT cap 1280 gave
+    // ceil(1.0125)=2 -> 648x503: overshooting the cap by 16px cost 75% of the
+    // pixels. Real sessions: all 3 shots taken without max_edge (the default
+    // path) and all 5 explicit requests for <=1280 landed on exactly half size;
+    // session 88aa0eec ate three half-size frames in a row and only got a sharp
+    // image after it worked around the bug by asking for max_edge=1296.
+    // The tool description promises "long-edge cap, scale proportionally" --
+    // so the cap must be honored as a CAP.
+    //
+    // public so tests/shot-scale.test.mjs can pin the exact numbers (and the
+    // same test drives a real window capture, so this cannot become orphaned
+    // math that Capture no longer calls).
+    public static int[] ScaleSize(int w, int h, int maxEdge) {
+      int longEdge = (w > h) ? w : h;
+      if (maxEdge <= 0 || longEdge <= maxEdge) return new int[] { w, h };
+      double f = (double)maxEdge / longEdge;
+      int nw = (int)Math.Round(w * f);
+      int nh = (int)Math.Round(h * f);
+      if (nw < 1) nw = 1;
+      if (nh < 1) nh = 1;
+      return new int[] { nw, nh };
+    }
+
     // Returns JPEG bytes, or null when the window cannot be captured.
     public static byte[] Capture(int hwndInt, int maxEdge, int quality) {
       RECT r;
@@ -59,9 +89,7 @@ namespace XNative {
       int w = r.R - r.L, h = r.B - r.T;
       if (w <= 0 || h <= 0) return null;
       // Downscale huge windows so one 4K desktop shot cannot eat the context.
-      int scale = 1;
-      int longEdge = (w > h) ? w : h;
-      if (longEdge > maxEdge) scale = (int)Math.Ceiling(longEdge / (double)maxEdge);
+      int[] sz = ScaleSize(w, h, maxEdge);
       Bitmap bmp;
       using (var full = new Bitmap(w, h, PixelFormat.Format24bppRgb)) {
         using (var g = Graphics.FromImage(full)) {
@@ -82,13 +110,13 @@ namespace XNative {
           }
         }
         if (n > 0 && black * 100 / n > 92) return null;
-        if (scale <= 1) {
+        if (sz[0] == w && sz[1] == h) {
           bmp = new Bitmap(full);
         } else {
-          bmp = new Bitmap(Math.Max(1, w / scale), Math.Max(1, h / scale));
+          bmp = new Bitmap(sz[0], sz[1]);
           using (var g2 = Graphics.FromImage(bmp)) {
             g2.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g2.DrawImage(full, 0, 0, bmp.Width, bmp.Height);
+            g2.DrawImage(full, 0, 0, sz[0], sz[1]);
           }
         }
       }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-control-x",
-  "version": "0.5.34",
+  "version": "0.5.35",
   "description": "DSH 插件：为 Agent 提供浏览器（headless CDP）与本机桌面（UIA/SendInput）的统一控制面，先观察后动作、不打扰用户。",
   "type": "module",
   "main": "./lib/index.js",
@@ -35,7 +35,7 @@
     "spike:koffi": "node spikes/koffi-probe.mjs",
     "verify:m1": "node scripts/m1-verify.mjs",
     "verify:m2": "node scripts/m2-verify.mjs",
-    "test": "node --test tests/smoke.test.mjs tests/ui.test.mjs tests/browser-idle.test.mjs tests/host-contract.test.mjs tests/activity.test.mjs tests/banner.test.mjs tests/banner-win.test.mjs tests/vision.test.mjs tests/updater.test.mjs tests/desktop-manager.test.mjs tests/ps-scripts.test.mjs tests/watch-guard.test.mjs tests/p1-fixes.test.mjs tests/degraded-fallback.test.mjs tests/release-hygiene.test.mjs tests/image-ref-integrity.test.mjs tests/shot-frame.test.mjs tests/launch-resolve.test.mjs tests/desktop-wait.test.mjs",
+    "test": "node --test tests/smoke.test.mjs tests/ui.test.mjs tests/browser-idle.test.mjs tests/host-contract.test.mjs tests/activity.test.mjs tests/banner.test.mjs tests/banner-win.test.mjs tests/vision.test.mjs tests/updater.test.mjs tests/desktop-manager.test.mjs tests/ps-scripts.test.mjs tests/watch-guard.test.mjs tests/p1-fixes.test.mjs tests/degraded-fallback.test.mjs tests/release-hygiene.test.mjs tests/image-ref-integrity.test.mjs tests/shot-frame.test.mjs tests/launch-resolve.test.mjs tests/desktop-wait.test.mjs tests/shot-scale.test.mjs",
     "verify:contract": "node scripts/host-contract-verify.mjs",
     "verify:host-css": "node scripts/verify-host-css.mjs",
     "verify:m3": "node scripts/m3-verify.mjs",
